@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: creatorhub-db
+    environment:
+      POSTGRES_USER: creatorhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-creatorhub}
+      POSTGRES_DB: creatorhub
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creatorhub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: creatorhub-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Defaults keep `docker compose up` working for local dev. For production,
+      # drop a .env file next to this file (see backend/.env.example) setting
+      # ENVIRONMENT=production + a strong SECRET_KEY + your real CORS origin.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SECRET_KEY: ${SECRET_KEY:-dev-creatorhub-secret-change-me}
+      DATABASE_URL: postgresql+psycopg2://creatorhub:${POSTGRES_PASSWORD:-creatorhub}@db:5432/creatorhub
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      FRONTEND_DIR: /app/frontend
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    volumes:
+      # Serve the frontend straight from the repo (live-editable, no rebuild).
+      - ./frontend:/app/frontend:ro
+      # Persist user uploads across rebuilds/redeploys.
+      - uploads_data:/app/uploads
+    ports:
+      - "8000:8000"
+
+volumes:
+  db_data:
+  uploads_data:

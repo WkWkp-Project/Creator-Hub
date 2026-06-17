@@ -1,0 +1,22 @@
+# Lower-bound pins so pip resolves wheels for the running interpreter.
+# Verified on Python 3.12 (Docker) and Python 3.14 (local dev).
+fastapi>=0.115.5
+uvicorn[standard]>=0.32.1
+sqlalchemy>=2.0.36
+pydantic>=2.10.3
+pydantic-settings>=2.6.1
+python-multipart>=0.0.17
+pandas>=2.2.4
+openpyxl>=3.1.5
+rapidfuzz>=3.10.1
+
+# PostgreSQL driver — only needed when DATABASE_URL points at Postgres
+# (the docker-compose / prod path, Python 3.12). Has no wheel for Python 3.14
+# yet, so it is kept optional: local dev uses the bundled SQLite database and
+# does not require it. Install manually when deploying with Postgres:
+#   pip install psycopg2-binary>=2.9.10
+# psycopg2-binary>=2.9.10
+
+# --- dev / test ---
+pytest>=8.3.4
+httpx>=0.28.1

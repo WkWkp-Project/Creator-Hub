@@ -1,0 +1,19 @@
+# Keep the deploy image small + clean
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.git
+.gitignore
+**/*.db
+backend/backups
+backend/uploads/avatars/*
+backend/uploads/campaigns/*
+docs
+*.md
+**/*.rar
+**/*.zip
+.claude
+.vscode
+.idea

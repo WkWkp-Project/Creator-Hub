@@ -1,0 +1,29 @@
+Creator Hub — ซอร์สโค้ดเต็ม (สำหรับรัน/แก้ไขต่อ)
+====================================================
+
+เครื่องใหม่ต้องมี: Python 3.12–3.14  (ดาวน์โหลด: https://www.python.org/downloads/  ตอนติดตั้งติ๊ก "Add Python to PATH")
+
+ขั้นตอนรัน (Windows / PowerShell) — เปิด PowerShell ในโฟลเดอร์นี้แล้วพิมพ์:
+
+    cd backend
+    py -m venv .venv
+    .\.venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+    python -m app.seed
+    uvicorn app.main:app --reload
+
+แล้วเปิดเบราว์เซอร์ไปที่:  http://localhost:8000
+ล็อกอิน:  admin / admin123   (viewer / viewer123 = ดูอย่างเดียว)
+
+--------------------------------------------------
+สร้างไฟล์โปรแกรม .exe ใหม่ (ถ้าต้องการ):
+    ดับเบิลคลิก  build_exe.bat   →  ได้ backend\dist\CreatorHub.exe
+
+รันชุดทดสอบ:
+    cd backend ; pytest -q
+
+เอกสารทั้งหมดอยู่ในโฟลเดอร์  docs\  (เริ่มที่ docs\README.md)
+ภาพรวมโปรเจกต์ + รายละเอียด อยู่ใน  README.md
+--------------------------------------------------
+หมายเหตุ: ในแพ็กนี้ไม่ได้ใส่ .venv / ฐานข้อมูล / ไฟล์อัปโหลด มาด้วย
+ระบบจะสร้างให้ใหม่อัตโนมัติตอนรันครั้งแรก (seed = ข้อมูลตัวอย่าง)

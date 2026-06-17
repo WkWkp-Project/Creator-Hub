@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+.env
+.pytest_cache/
+# Node / editor
+node_modules/
+.DS_Store
+.idea/
+.vscode/
+# Docker volumes (local)
+db_data/
+# User uploads (keep the folders, ignore the contents)
+backend/uploads/avatars/*
+backend/uploads/campaigns/*
+!backend/uploads/avatars/.gitkeep
+!backend/uploads/campaigns/.gitkeep
+# Local backups (snapshots on disk)
+backend/backups/
+# PyInstaller build artifacts + desktop app data
+backend/build/
+backend/dist/
+backend/*.spec
+**/CreatorHubData/

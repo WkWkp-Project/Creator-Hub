@@ -1,0 +1,17 @@
+# Render blueprint — one-click demo deploy (free tier).
+# In Render: New → Blueprint → connect this repo. It builds the root Dockerfile,
+# runs the seeder, and serves the full app (API + UI) at a public HTTPS URL.
+#
+# Demo uses the bundled SQLite DB (auto-seeded on each boot). For a persistent
+# deployment, add a Render PostgreSQL service and set DATABASE_URL + ENVIRONMENT
+# + SECRET_KEY (see docs/DEPLOYMENT.md).
+services:
+  - type: web
+    name: creator-hub-demo
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: WEB_CONCURRENCY
+        value: "1"
