@@ -55,6 +55,10 @@ def create_asset(data: ContentAssetCreate, _: models.User = Depends(require_admi
     values = data.model_dump()
     if not values.get("input_files"):
         values["input_files"] = [dict(f) for f in DEFAULT_INPUT_FILES]
+    # JSON list columns must never be None (response model requires lists).
+    for k in ("kols", "sow_options", "influencer_ids"):
+        if values.get(k) is None:
+            values[k] = []
     obj = ContentAsset(**values)
     db.add(obj)
     db.commit()

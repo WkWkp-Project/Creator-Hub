@@ -1,22 +1,28 @@
+# Creator Hub — runtime dependencies
+#
 # Lower-bound pins so pip resolves wheels for the running interpreter.
-# Verified on Python 3.12 (Docker) and Python 3.14 (local dev).
+# Verified on Python 3.12 (Docker / production) and Python 3.14 (local dev).
+# Dev/test tools live in requirements-dev.txt and are NOT shipped in the image.
+
+# ── Web framework + ASGI server ──────────────────────────────────────────────
 fastapi>=0.115.5
 uvicorn[standard]>=0.32.1
+
+# ── Data layer (ORM + validation) ────────────────────────────────────────────
 sqlalchemy>=2.0.36
 pydantic>=2.10.3
 pydantic-settings>=2.6.1
+
+# ── Uploads + Excel/CSV import-export ─────────────────────────────────────────
 python-multipart>=0.0.17
 pandas>=2.2.4
 openpyxl>=3.1.5
+
+# ── Fuzzy matching (import dedupe / search) ──────────────────────────────────
 rapidfuzz>=3.10.1
 
-# PostgreSQL driver — only needed when DATABASE_URL points at Postgres
-# (the docker-compose / prod path, Python 3.12). Has no wheel for Python 3.14
-# yet, so it is kept optional: local dev uses the bundled SQLite database and
-# does not require it. Install manually when deploying with Postgres:
-#   pip install psycopg2-binary>=2.9.10
-# psycopg2-binary>=2.9.10
-
-# --- dev / test ---
-pytest>=8.3.4
-httpx>=0.28.1
+# ── PostgreSQL driver ────────────────────────────────────────────────────────
+# Used only when DATABASE_URL points at Postgres (the Docker / production path).
+# Gated to Python < 3.14 because psycopg2-binary has no 3.14 wheel yet; local
+# 3.14 dev uses the bundled SQLite database and skips this automatically.
+psycopg2-binary>=2.9.10 ; python_version < "3.14"

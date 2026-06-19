@@ -34,6 +34,7 @@ class Brand(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    logo_url: Mapped[str] = mapped_column(String(500), default="")
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -83,6 +84,7 @@ class MemberOut(MemberBase):
 
 class BrandBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=160)
+    logo_url: str = ""
     note: str = ""
 
 
@@ -93,6 +95,7 @@ class BrandCreate(BrandBase):
 class BrandUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     name: str | None = Field(None, min_length=1, max_length=160)
+    logo_url: str | None = None
     note: str | None = None
 
 

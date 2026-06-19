@@ -17,7 +17,10 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    # Build the single canonical image (same Dockerfile used for production).
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: creatorhub-api
     depends_on:
       db:

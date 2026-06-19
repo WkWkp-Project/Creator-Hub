@@ -57,6 +57,11 @@ class ContentAsset(Base):
     input_files: Mapped[list] = mapped_column(JSON, default=lambda: [dict(f) for f in DEFAULT_INPUT_FILES])
     # Merged from the legacy Campaign module: creators assigned to this campaign.
     influencer_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # Section B — per-KOL campaign rows (each pulled from the influencer directory)
+    # + the campaign's selectable Scope-of-Work options. Flexible JSON so the row
+    # shape can evolve without a migration. See docs for the field contract.
+    kols: Mapped[list] = mapped_column(JSON, default=list)
+    sow_options: Mapped[list] = mapped_column(JSON, default=list)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -80,6 +85,8 @@ class ContentAssetBase(BaseModel):
     drive_folder_url: str = ""
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] = Field(default_factory=list)
+    kols: list[dict[str, Any]] | None = None
+    sow_options: list[str] | None = None
 
     @field_validator("status")
     @classmethod
@@ -110,6 +117,8 @@ class ContentAssetUpdate(BaseModel):
     drive_folder_url: str | None = None
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] | None = None
+    kols: list[dict[str, Any]] | None = None
+    sow_options: list[str] | None = None
 
     @field_validator("status")
     @classmethod
@@ -123,6 +132,8 @@ class ContentAssetOut(ContentAssetBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     input_files: list[dict[str, Any]] = Field(default_factory=list)
+    kols: list[dict[str, Any]] = Field(default_factory=list)
+    sow_options: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

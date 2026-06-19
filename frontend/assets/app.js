@@ -1179,13 +1179,6 @@
         </div>
         <form id="inf-form" class="p-lg overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-md">
           ${sectionHead("badge", "ข้อมูลส่วนตัว · Personal details")}
-          ${field("name", "Name *", d.name)}
-          ${field("handle", "Handle", d.handle)}
-          ${field("niche", "Niche (comma sep)", d.niche)}
-          ${field("platform", "Platform", d.platform)}
-          ${field("age", "Age", d.age ?? "", "number")}
-          ${field("location", "Location", d.location)}
-          ${field("active_since", "Active Since", d.active_since)}
           <div class="sm:col-span-2 flex items-center gap-md">
             <div id="avatar-preview" class="w-16 h-16 rounded-full overflow-hidden bg-surface-container-high border border-outline-variant flex items-center justify-center shrink-0">
               ${d.avatar_url ? `<img src="${esc(mediaSrc(d.avatar_url))}" class="w-full h-full object-cover"/>` : `<span class="material-symbols-outlined text-on-surface-variant">person</span>`}
@@ -1200,6 +1193,13 @@
               <span data-avatar-status class="text-[11px] text-on-surface-variant"></span>
             </div>
           </div>
+          ${field("name", "Name *", d.name)}
+          ${field("handle", "Handle", d.handle)}
+          ${field("niche", "KOL Type (comma sep)", d.niche)}
+          ${field("platform", "Platform", d.platform)}
+          ${field("age", "Age", d.age ?? "", "number")}
+          ${field("location", "Location", d.location)}
+          ${field("active_since", "Active Since", d.active_since)}
           ${sectionHead("groups", "ตัวชี้วัด · Audience metrics")}
           ${field("followers", "Followers", d.followers ?? 0, "number")}
           ${field("engagement_rate", "Engagement %", d.engagement_rate ?? 0, "number")}

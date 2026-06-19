@@ -30,6 +30,13 @@ def run_light_migrations(engine: Engine) -> None:
                         {"tier": tier_for_followers(followers), "id": row_id},
                     )
 
+    # brands — logo added after the table first shipped.
+    if "brands" in tables:
+        brand_cols = {col["name"] for col in inspector.get_columns("brands")}
+        with engine.begin() as conn:
+            if "logo_url" not in brand_cols:
+                conn.execute(text("ALTER TABLE brands ADD COLUMN logo_url VARCHAR(500) DEFAULT ''"))
+
     # content_assets — additive columns added after the table first shipped.
     if "content_assets" in tables:
         ca_cols = {col["name"] for col in inspector.get_columns("content_assets")}
@@ -37,6 +44,8 @@ def run_light_migrations(engine: Engine) -> None:
             "influencer_ids": "JSON DEFAULT '[]'",
             "brand_id": "INTEGER",
             "responsible_member_id": "INTEGER",
+            "kols": "JSON DEFAULT '[]'",
+            "sow_options": "JSON DEFAULT '[]'",
         }
         with engine.begin() as conn:
             for col, ddl in adds.items():

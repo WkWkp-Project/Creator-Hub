@@ -74,7 +74,7 @@
 
 1. push โค้ดขึ้น GitHub
 2. สร้าง **PostgreSQL** instance บนแพลตฟอร์ม → ได้ `DATABASE_URL` (แปลงให้ขึ้นต้น `postgresql+psycopg2://`)
-3. สร้าง **Web Service** ชี้ไปที่ `backend/Dockerfile`
+3. สร้าง **Web Service** ชี้ไปที่ `Dockerfile` (ที่ root — image เดียวใช้ได้ทั้ง demo และ production)
 4. ใส่ env: `ENVIRONMENT=production`, `SECRET_KEY`, `DATABASE_URL`, `CORS_ORIGINS=https://<โดเมนของคุณ>`, `WEB_CONCURRENCY=2`
 5. เพิ่ม **persistent disk** mount ที่ `/app/uploads` (สำหรับไฟล์อัปโหลด)
 6. deploy → แพลตฟอร์มให้โดเมน HTTPS มาเลย · seed รันอัตโนมัติตอน start (admin/admin123 → รีบเปลี่ยน)
