@@ -43,7 +43,11 @@ class ContentAsset(Base):
     campaign_name: Mapped[str] = mapped_column(String(200), index=True)
     # Grouping + lead (loose references to Brand / Member; admins can edit freely).
     brand_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Lead(s) responsible for the campaign. `responsible_member_id` is kept as the
+    # primary lead for back-compat; `responsible_member_ids` holds the full set so
+    # a campaign can have several people responsible.
     responsible_member_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    responsible_member_ids: Mapped[list] = mapped_column(JSON, default=list)
     period_start: Mapped[str] = mapped_column(String(40), default="")
     period_end: Mapped[str] = mapped_column(String(40), default="")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
@@ -62,6 +66,13 @@ class ContentAsset(Base):
     # shape can evolve without a migration. See docs for the field contract.
     kols: Mapped[list] = mapped_column(JSON, default=list)
     sow_options: Mapped[list] = mapped_column(JSON, default=list)
+    # Per-campaign access control — User ids granted access (managers edit /
+    # viewers read). Set by admins only; admins always have access regardless.
+    assigned_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # Which budget figures are shown to the customer. Keys: rate, gen_code_price,
+    # boosting_cost, total. A missing/true key = shown; false = hidden from
+    # viewers (admins/managers always see them, with an eye indicator).
+    budget_show: Mapped[dict] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -76,6 +87,7 @@ class ContentAssetBase(BaseModel):
     campaign_name: str = Field(..., min_length=1, max_length=200)
     brand_id: int | None = None
     responsible_member_id: int | None = None
+    responsible_member_ids: list[int] = Field(default_factory=list)
     period_start: str = ""
     period_end: str = ""
     status: str = "draft"
@@ -85,6 +97,8 @@ class ContentAssetBase(BaseModel):
     drive_folder_url: str = ""
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] = Field(default_factory=list)
+    assigned_user_ids: list[int] = Field(default_factory=list)
+    budget_show: dict[str, bool] = Field(default_factory=dict)
     kols: list[dict[str, Any]] | None = None
     sow_options: list[str] | None = None
 
@@ -108,6 +122,7 @@ class ContentAssetUpdate(BaseModel):
     campaign_name: str | None = Field(None, min_length=1, max_length=200)
     brand_id: int | None = None
     responsible_member_id: int | None = None
+    responsible_member_ids: list[int] | None = None
     period_start: str | None = None
     period_end: str | None = None
     status: str | None = None
@@ -117,6 +132,8 @@ class ContentAssetUpdate(BaseModel):
     drive_folder_url: str | None = None
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] | None = None
+    assigned_user_ids: list[int] | None = None
+    budget_show: dict[str, bool] | None = None
     kols: list[dict[str, Any]] | None = None
     sow_options: list[str] | None = None
 

@@ -123,8 +123,21 @@ def test_tier_auto_derived_on_create():
     manual = client.post("/api/influencers", json={
         "name": "Manual Tier", "followers": 50_000, "tier": "Mega"}).json()
     assert manual["tier"] == "Mega"
-    client.delete(f"/api/influencers/{auto['id']}")
-    client.delete(f"/api/influencers/{manual['id']}")
+    # A known tier typed in any casing is canonicalised.
+    cased = client.post("/api/influencers", json={"name": "Cased", "followers": 1, "tier": "micro"}).json()
+    assert cased["tier"] == "Micro"
+    # A custom, hand-entered tier label is kept verbatim (not rejected).
+    custom = client.post("/api/influencers", json={
+        "name": "Custom Tier", "followers": 50_000, "tier": "Macro"}).json()
+    assert custom["tier"] == "Macro"
+    # A followers-only edit must NOT clobber an explicit/custom tier.
+    kept = client.put(f"/api/influencers/{custom['id']}", json={"followers": 2_000_000}).json()
+    assert kept["tier"] == "Macro"
+    # Clearing the tier (empty string) re-derives it from followers.
+    recleared = client.put(f"/api/influencers/{custom['id']}", json={"tier": ""}).json()
+    assert recleared["tier"] == "Mega"
+    for x in (auto, manual, cased, custom):
+        client.delete(f"/api/influencers/{x['id']}")
 
 
 def test_tier_filter_and_import_coercion():
@@ -335,8 +348,14 @@ def test_content_asset_crud_and_drive_links():
     # assign creators (legacy merge)
     upd = client.put(f"/api/assets/{aid}", json={"influencer_ids": [1, 2]}).json()
     assert upd["influencer_ids"] == [1, 2]
-    # viewer read-only
+    # per-campaign access: a viewer NOT assigned cannot even see it
+    assert client.get(f"/api/assets/{aid}", headers=VIEWER).status_code == 404
+    # admin grants the viewer access → now read-only (can see, cannot edit)
+    viewer_id = client.get("/api/auth/me", headers=VIEWER).json()["id"]
+    client.put(f"/api/assets/{aid}", json={"assigned_user_ids": [viewer_id]})
     assert client.get(f"/api/assets/{aid}", headers=VIEWER).status_code == 200
+    assert client.put(f"/api/assets/{aid}", json={"status": "active"}, headers=VIEWER).status_code == 403
+    # viewers can never create
     assert client.post("/api/assets", json={"campaign_name": "no"}, headers=VIEWER).status_code == 403
     assert client.delete(f"/api/assets/{aid}").status_code == 204
 
@@ -356,6 +375,16 @@ def test_members_brands_and_campaign_links():
         "campaign_name": "Linked Campaign", "drive_folder_url": "https://drive.google.com/drive/folders/x",
         "brand_id": brand["id"], "responsible_member_id": mem["id"]}).json()
     assert asset["brand_id"] == brand["id"] and asset["responsible_member_id"] == mem["id"]
+    # member update keeps the linked login account in sync (regression: must not
+    # call a missing helper) — promote the customer to admin, expect 200.
+    upd = client.put(f"/api/members/{cust['id']}", json={"role": "admin", "email": "b@x.com"})
+    assert upd.status_code == 200 and upd.json()["role"] == "admin"
+    # manager is a valid Member role and syncs to a manager login account.
+    mgr = client.post("/api/members", json={"name": "Mgr C", "email": "mgr@x.com", "role": "manager"})
+    assert mgr.status_code == 201 and mgr.json()["role"] == "manager"
+    synced = [u for u in client.get("/api/auth/users").json() if u["email"] == "mgr@x.com"]
+    assert synced and synced[0]["role"] == "manager"
+    assert client.post("/api/members", json={"name": "X", "role": "superuser"}).status_code == 422
     # viewer cannot write members/brands
     assert client.post("/api/members", json={"name": "Z"}, headers=VIEWER).status_code == 403
     assert client.post("/api/brands", json={"name": "Z"}, headers=VIEWER).status_code == 403
@@ -364,6 +393,97 @@ def test_members_brands_and_campaign_links():
     client.delete(f"/api/brands/{brand['id']}")
     client.delete(f"/api/members/{mem['id']}")
     client.delete(f"/api/members/{cust['id']}")
+    client.delete(f"/api/members/{mgr.json()['id']}")
+
+
+def test_company_brand_campaign_consistency():
+    # A brand carries the owning Company; campaigns under it inherit it as client_name.
+    brand = client.post("/api/brands", json={"name": "Cascade Brand", "company": "Acme Co."}).json()
+    assert brand["company"] == "Acme Co."
+    # New campaign under the brand gets client_name forced to the brand's company,
+    # even if a different client_name is supplied.
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Cascade Camp", "drive_folder_url": "https://drive.google.com/drive/folders/c",
+        "brand_id": brand["id"], "client_name": "Typed Wrong Co."}).json()
+    assert asset["client_name"] == "Acme Co."
+    # Changing the brand's company cascades down to existing campaigns.
+    client.put(f"/api/brands/{brand['id']}", json={"company": "Acme Holdings"})
+    assert client.get(f"/api/assets/{asset['id']}").json()["client_name"] == "Acme Holdings"
+    # A campaign with no brand keeps its free-text client_name.
+    free = client.post("/api/assets", json={
+        "campaign_name": "Free Camp", "drive_folder_url": "https://drive.google.com/drive/folders/f",
+        "client_name": "Indie Client"}).json()
+    assert free["client_name"] == "Indie Client"
+    # cleanup
+    client.delete(f"/api/assets/{asset['id']}")
+    client.delete(f"/api/assets/{free['id']}")
+    client.delete(f"/api/brands/{brand['id']}")
+
+
+def test_user_carries_org_note_and_syncs_to_member():
+    # The merged User page carries Organization + Note (folded in from Members)
+    # and syncs them onto the linked directory Member.
+    created = client.post("/api/auth/users", json={
+        "username": "orguser", "password": "pw1234", "email": "org@x.com",
+        "full_name": "Org User", "role": "viewer",
+        "organization": "Wakuwaku", "note": "VIP contact"})
+    assert created.status_code == 201
+    body = created.json()
+    assert body["organization"] == "Wakuwaku" and body["note"] == "VIP contact"
+    # the auto-created Member mirrors org/note
+    mem = [m for m in client.get("/api/members").json() if m["email"] == "org@x.com"]
+    assert mem and mem[0]["organization"] == "Wakuwaku" and mem[0]["note"] == "VIP contact"
+    # cleanup
+    client.delete(f"/api/auth/users/{body['id']}")
+    client.delete(f"/api/members/{mem[0]['id']}")
+
+
+def test_admin_can_be_demoted_to_manager_when_not_last():
+    # Demoting a non-last admin to manager (the new role) must be allowed —
+    # the last-admin guard should only fire when this is the only admin left.
+    extra = client.post("/api/auth/users", json={
+        "username": "extra_admin_qa", "password": "pw1234", "role": "admin"}).json()
+    res = client.put(f"/api/auth/users/{extra['id']}", json={"role": "manager"})
+    assert res.status_code == 200 and res.json()["role"] == "manager"
+    client.delete(f"/api/auth/users/{extra['id']}")
+
+
+def test_user_position_field():
+    created = client.post("/api/auth/users", json={
+        "username": "posuser", "password": "pw1234", "email": "pos@x.com",
+        "full_name": "Pos User", "role": "viewer", "position": "Account Manager"})
+    assert created.status_code == 201 and created.json()["position"] == "Account Manager"
+    upd = client.put(f"/api/auth/users/{created.json()['id']}", json={"position": "Creative Lead"})
+    assert upd.status_code == 200 and upd.json()["position"] == "Creative Lead"
+    client.delete(f"/api/auth/users/{created.json()['id']}")
+    mem = [m for m in client.get("/api/members").json() if m["email"] == "pos@x.com"]
+    if mem:
+        client.delete(f"/api/members/{mem[0]['id']}")
+
+
+def test_campaign_multiple_responsible_members():
+    m1 = client.post("/api/members", json={"name": "Lead One", "role": "admin"}).json()
+    m2 = client.post("/api/members", json={"name": "Lead Two", "role": "admin"}).json()
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Multi Lead Camp", "drive_folder_url": "https://drive.google.com/drive/folders/m",
+        "responsible_member_ids": [m1["id"], m2["id"]]}).json()
+    assert asset["responsible_member_ids"] == [m1["id"], m2["id"]]
+    # narrow to a single lead
+    upd = client.put(f"/api/assets/{asset['id']}", json={"responsible_member_ids": [m2["id"]]}).json()
+    assert upd["responsible_member_ids"] == [m2["id"]]
+    client.delete(f"/api/assets/{asset['id']}")
+    client.delete(f"/api/members/{m1['id']}")
+    client.delete(f"/api/members/{m2['id']}")
+
+
+def test_campaign_budget_show_visibility():
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Budget Vis", "drive_folder_url": "https://drive.google.com/drive/folders/b"}).json()
+    assert asset["budget_show"] == {}   # default: everything shown
+    upd = client.put(f"/api/assets/{asset['id']}", json={
+        "budget_show": {"total": False, "boosting_cost": False}}).json()
+    assert upd["budget_show"] == {"total": False, "boosting_cost": False}
+    client.delete(f"/api/assets/{asset['id']}")
 
 
 def test_production_config_flags():

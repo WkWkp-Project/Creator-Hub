@@ -101,9 +101,16 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    # Email links a login account to its directory Member (kept in sync by email).
+    email: Mapped[str] = mapped_column(String(160), default="", index=True)
     full_name: Mapped[str] = mapped_column(String(160), default="")
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(20), default="viewer", index=True)
+    # Directory fields (folded in from the old Members page): the org/company this
+    # person belongs to, their job position, and a free-text note.
+    organization: Mapped[str] = mapped_column(String(160), default="")
+    position: Mapped[str] = mapped_column(String(120), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

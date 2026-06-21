@@ -110,8 +110,10 @@
   }
   const TIER_ICON = { Nano: "eco", Micro: "trending_up", Mega: "stars" };
   function tierChip(tier) {
-    if (!tier || !TIERS.includes(tier)) return "";
-    return `<span class="tier-chip tier-${tier}"><span class="material-symbols-outlined text-[13px]">${TIER_ICON[tier]}</span>${tier}</span>`;
+    if (!tier) return "";
+    const known = TIERS.includes(tier);
+    const icon = TIER_ICON[tier] || "workspace_premium";
+    return `<span class="tier-chip ${known ? `tier-${tier}` : "tier-custom"}"><span class="material-symbols-outlined text-[13px]">${icon}</span>${esc(tier)}</span>`;
   }
   // Resolve an upload path / URL to something the browser can load.
   const mediaSrc = (url) => (url && url.startsWith("/uploads/") ? (window.API_BASE || "") + url : url);
@@ -149,8 +151,29 @@
   const routes = {};
   const route = (path, handler) => (routes[path] = handler);
 
+  // ---------- in-app back history ----------
+  // Remembers the last few visited views so a "back" button returns to where the
+  // user actually came from (not a hard-coded route). Capped at 4 entries.
+  const MAX_HISTORY = 4;
+  let navHistory = [];
+  let currentHash = null;
+  let goingBack = false;
+  function recordNav(hash) {
+    if (goingBack) { goingBack = false; }            // arrived here via goBack(): don't re-push
+    else if (currentHash && currentHash !== hash) {
+      navHistory.push(currentHash);
+      while (navHistory.length > MAX_HISTORY) navHistory.shift();
+    }
+    currentHash = hash;
+  }
+  function goBack(fallback = "#/directory") {
+    if (navHistory.length) { goingBack = true; location.hash = navHistory.pop(); }
+    else { location.hash = fallback; }
+  }
+
   async function render() {
     const hash = location.hash || "#/directory";
+    recordNav(hash);
     const [path, param] = hash.replace(/^#/, "").split("/").filter(Boolean).length
       ? parseHash(hash) : ["directory", null];
     // sidebar active state
@@ -296,7 +319,7 @@
     // back + header
     view.appendChild(el(`
       <button data-action="back" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold">
-        <span class="material-symbols-outlined text-[18px]">arrow_back</span> Back to Directory</button>`));
+        <span class="material-symbols-outlined text-[18px]">arrow_back</span> ย้อนกลับ</button>`));
 
     const niches = (inf.niche || "").split(",").map((n) => n.trim()).filter(Boolean);
     view.appendChild(el(`
@@ -462,7 +485,7 @@
     view.appendChild(bottomRow);
 
     // wire actions
-    view.querySelector("[data-action=back]").addEventListener("click", () => (location.hash = "#/directory"));
+    view.querySelector("[data-action=back]").addEventListener("click", () => goBack("#/directory"));
     view.querySelectorAll("[data-action=edit]").forEach((b) => b.addEventListener("click", () => openInfluencerForm(inf)));
     view.querySelector("[data-action=delete]").addEventListener("click", async () => {
       if (!confirm(`Remove ${inf.name}? This cannot be undone.`)) return;
@@ -625,7 +648,7 @@
     const c = await api("/campaigns/" + id);
     const all = await api("/influencers?limit=200");
     const assigned = (c.influencer_ids || []).map((iid) => all.items.find((x) => x.id === iid)).filter(Boolean);
-    view.appendChild(el(`<button data-action="back-camp" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold"><span class="material-symbols-outlined text-[18px]">arrow_back</span> Back to Campaigns</button>`));
+    view.appendChild(el(`<button data-action="back-camp" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold"><span class="material-symbols-outlined text-[18px]">arrow_back</span> ย้อนกลับ</button>`));
     view.appendChild(el(`
       <article class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg">
         <div class="flex flex-wrap items-start gap-md">
@@ -661,7 +684,7 @@
     });
     view.appendChild(roster);
 
-    view.querySelector("[data-action=back-camp]").addEventListener("click", () => (location.hash = "#/campaigns"));
+    view.querySelector("[data-action=back-camp]").addEventListener("click", () => goBack("#/campaigns"));
     view.querySelector("[data-action=edit-camp]")?.addEventListener("click", () => openCampaignForm(c));
     view.querySelector("[data-action=del-camp]")?.addEventListener("click", async () => {
       if (!confirm(`ลบแคมเปญ "${c.name}"?`)) return;
@@ -811,7 +834,7 @@
     const acct = el(`
       <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg max-w-xl">
         <h3 class="text-[20px] font-semibold mb-sm flex items-center gap-sm"><span class="material-symbols-outlined text-primary">manage_accounts</span>บัญชีของฉัน</h3>
-        <p class="text-[14px] text-on-surface-variant mb-md">${esc(auth.user.full_name || auth.user.username)} · @${esc(auth.user.username)} · ${auth.user.role === "admin" ? "ผู้ดูแล (Admin)" : "ผู้ชม (Viewer)"}</p>
+        <p class="text-[14px] text-on-surface-variant mb-md">${esc(auth.user.full_name || auth.user.username)} · @${esc(auth.user.username)} · ${auth.user.role === "admin" ? "ผู้ดูแล (Admin)" : auth.user.role === "manager" ? "ผู้จัดการ (Manager)" : "ผู้ชม (Viewer)"}</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-sm">
           ${pwInput("pw-cur", "รหัสผ่านปัจจุบัน")}
           ${pwInput("pw-new", "รหัสผ่านใหม่ (≥ 4 ตัว)")}
@@ -837,26 +860,48 @@
     if (isAdmin()) {
       const card = el(`
         <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
-          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center"><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">group</span>จัดการผู้ใช้</h3>
-            <button id="add-user" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">person_add</span>เพิ่มผู้ใช้</button></div>
-          <div class="p-lg" id="user-list"></div></div>`);
+          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center flex-wrap gap-sm"><div><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">group</span>จัดการผู้ใช้และสมาชิก</h3><p class="text-[12px] text-on-surface-variant mt-0.5">รายชื่อคนทั้งหมด — ทีมงาน · ผู้จัดการ · ลูกค้า (รวมหน้า Members เดิมไว้ที่นี่)</p></div>
+            <div class="flex gap-sm items-center flex-wrap">
+              <div class="relative"><span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span><input id="u-search" class="pl-9 bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[14px] focus:border-primary focus:ring-1 focus:ring-primary w-48" placeholder="ค้นหาผู้ใช้..."/></div>
+              <button id="sync-members" class="bg-surface border border-primary text-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-surface-container-low flex items-center gap-1" title="ลิงก์บัญชีผู้ใช้กับข้อมูลสมาชิก (ที่ใช้ใน Lead/เจ้าของแคมเปญ) ให้ตรงกัน"><span class="material-symbols-outlined text-[18px]">sync</span>ซิงค์ข้อมูล</button>
+              <button id="add-user" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">person_add</span>เพิ่มผู้ใช้</button>
+            </div></div>
+          <div class="p-lg flex flex-col gap-sm" id="user-list"></div></div>`);
       view.appendChild(card);
       const listEl = card.querySelector("#user-list");
-      const loadUsers = async () => {
-        const users = await api("/auth/users");
-        const byId = Object.fromEntries(users.map((u) => [u.id, u]));
-        listEl.innerHTML = `<div class="flex flex-col gap-sm">${users.map((u) => `
-          <div class="flex items-center gap-md py-2 border-b border-outline-variant/60" data-uid="${u.id}">
-            <span class="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold font-poppins">${esc((u.full_name||u.username)[0].toUpperCase())}</span>
-            <div class="flex-1 min-w-0"><div class="font-semibold truncate">${esc(u.full_name||u.username)}</div><div class="text-[12px] text-on-surface-variant">@${esc(u.username)}${u.id===auth.user.id?" · (คุณ)":""}</div></div>
-            <span class="${u.role==="admin"?"bg-primary-fixed text-primary":"bg-surface-container text-on-surface-variant"} text-[12px] font-semibold px-sm py-1 rounded-full">${u.role}</span>
-            <button data-edit class="text-on-surface-variant hover:text-primary" title="ดู/แก้ไขผู้ใช้"><span class="material-symbols-outlined text-[20px]">edit</span></button>
-            <button data-del class="text-on-surface-variant hover:text-error" title="ลบผู้ใช้"><span class="material-symbols-outlined text-[20px]">delete</span></button>
-          </div>`).join("")}</div>`;
-        listEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
-          const uid = +b.closest("[data-uid]").dataset.uid;
-          openUserForm(loadUsers, byId[uid]);
-        }));
+      const USER_GROUPS = [
+        { key: "admin", title: "Admins · ผู้ดูแล", icon: "shield_person" },
+        { key: "manager", title: "Managers · จัดการแคมเปญที่ได้รับ", icon: "manage_accounts" },
+        { key: "viewer", title: "Viewers · ดูเฉพาะที่ได้รับสิทธิ์", icon: "visibility" },
+      ];
+      let uQuery = "", allUsers = [];
+      const uCollapsed = {};
+      const userRow = (u) => `
+        <div class="flex items-center gap-md px-md py-2.5" data-uid="${u.id}">
+          <span class="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold font-poppins shrink-0">${esc((u.full_name||u.username)[0].toUpperCase())}</span>
+          <div class="flex-1 min-w-0"><div class="font-semibold truncate">${esc(u.full_name||u.username)}${u.position?` <span class="text-[11px] font-normal text-on-surface-variant">· ${esc(u.position)}</span>`:""}${u.organization?` <span class="text-[11px] font-normal text-on-surface-variant">· ${esc(u.organization)}</span>`:""}</div><div class="text-[12px] text-on-surface-variant truncate">@${esc(u.username)}${u.email?` · ✉ ${esc(u.email)}`:""}${u.id===auth.user.id?" · (คุณ)":""}</div></div>
+          <span class="${u.role==="admin"?"bg-primary-fixed text-primary":"bg-surface-container text-on-surface-variant"} text-[12px] font-semibold px-sm py-1 rounded-full">${u.role}</span>
+          <button data-edit class="text-on-surface-variant hover:text-primary" title="ดู/แก้ไขผู้ใช้"><span class="material-symbols-outlined text-[20px]">edit</span></button>
+          <button data-del class="text-on-surface-variant hover:text-error" title="ลบผู้ใช้"><span class="material-symbols-outlined text-[20px]">delete</span></button>
+        </div>`;
+      const renderUsers = () => {
+        const qq = uQuery.trim().toLowerCase();
+        listEl.innerHTML = USER_GROUPS.map((g) => {
+          const all = allUsers.filter((u) => u.role === g.key);
+          const arr = qq ? all.filter((u) => `${u.full_name||""} ${u.username} ${u.email||""}`.toLowerCase().includes(qq)) : all;
+          const open = qq ? arr.length > 0 : !uCollapsed[g.key];
+          return `<div class="border border-outline-variant rounded-xl overflow-hidden">
+            <button class="w-full px-md py-2.5 flex items-center gap-sm hover:bg-surface-container-low transition-colors text-left" data-ug="${g.key}">
+              <span class="material-symbols-outlined text-on-surface-variant transition-transform ${open?"":"-rotate-90"}">expand_more</span>
+              <span class="material-symbols-outlined text-primary text-[18px]">${g.icon}</span>
+              <span class="font-semibold flex-1">${g.title}</span>
+              <span class="bg-surface-container text-on-surface-variant text-[12px] font-semibold px-sm py-0.5 rounded-full">${arr.length}${qq&&arr.length!==all.length?" / "+all.length:""}</span>
+            </button>
+            <div class="${open?"":"hidden"}">${arr.length?`<div class="max-h-[50vh] overflow-y-auto border-t border-outline-variant divide-y divide-outline-variant/50">${arr.map(userRow).join("")}</div>`:`<div class="px-md pb-md text-[13px] text-on-surface-variant">${qq?"ไม่พบผู้ใช้ที่ค้นหา":"— ไม่มี —"}</div>`}</div>
+          </div>`;
+        }).join("");
+        listEl.querySelectorAll("[data-ug]").forEach((b) => b.addEventListener("click", () => { if (uQuery.trim()) return; uCollapsed[b.dataset.ug] = !uCollapsed[b.dataset.ug]; renderUsers(); }));
+        listEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => openUserForm(loadUsers, allUsers.find((u) => u.id === +b.closest("[data-uid]").dataset.uid))));
         listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
           const uid = b.closest("[data-uid]").dataset.uid;
           if (!confirm("ลบผู้ใช้นี้?")) return;
@@ -864,7 +909,16 @@
           catch (e) { toast(e.message, "err"); }
         }));
       };
+      const loadUsers = async () => { allUsers = await api("/auth/users"); renderUsers(); };
+      card.querySelector("#u-search").addEventListener("input", (e) => { uQuery = e.target.value; renderUsers(); });
       card.querySelector("#add-user").addEventListener("click", () => openUserForm(loadUsers));
+      card.querySelector("#sync-members").addEventListener("click", async () => {
+        try {
+          const r = await api("/auth/reconcile-members", { method: "POST" });
+          toast(`ซิงค์แล้ว — สร้าง Member ใหม่ ${r.members_created} · สร้าง User ใหม่ ${r.users_created}${r.skipped_no_email ? ` · ข้าม ${r.skipped_no_email} login ระบบ` : ""}`);
+          loadUsers();
+        } catch (e) { toast(e.message, "err"); }
+      });
       await loadUsers();
 
       // --- Local Backup (safety net) ---
@@ -951,9 +1005,14 @@
           <div class="p-lg flex flex-col gap-sm">
             <label class="flex flex-col gap-1">${lbl("ชื่อ-สกุล")}<input id="u-name" value="${esc(u.full_name || "")}" placeholder="ชื่อ-สกุล" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("Username")}<input id="u-user" value="${esc(u.username || "")}" placeholder="Username (อย่างน้อย 3 ตัว)" class="${inpCls} ${existing ? "opacity-60" : ""}" ${existing ? "disabled" : ""}/></label>
+            <label class="flex flex-col gap-1">${lbl("Email (ลิงก์เข้ากับ Members — ใส่แล้วจะสร้าง/ผูก Member ให้อัตโนมัติ)")}<input id="u-email" value="${esc(u.email || "")}" placeholder="name@company.com" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("สิทธิ์การใช้งาน")}<select id="u-role" class="${inpCls}">
-              <option value="viewer" ${u.role === "viewer" ? "selected" : ""}>Viewer (ลูกค้า — ดูอย่างเดียว)</option>
+              <option value="viewer" ${u.role === "viewer" ? "selected" : ""}>Viewer (ดูเฉพาะแคมเปญที่ได้รับสิทธิ์)</option>
+              <option value="manager" ${u.role === "manager" ? "selected" : ""}>Manager (จัดการเฉพาะแคมเปญที่ถูก assign)</option>
               <option value="admin" ${u.role === "admin" ? "selected" : ""}>Admin (ผู้ดูแล — จัดการได้เต็ม)</option></select></label>
+            <label class="flex flex-col gap-1">${lbl("องค์กร / บริษัท (Organization)")}<input id="u-org" value="${esc(u.organization || "")}" placeholder="เช่น Wakuwaku, MOLLE" class="${inpCls}"/></label>
+            <label class="flex flex-col gap-1">${lbl("ตำแหน่งงาน (Position)")}<input id="u-position" value="${esc(u.position || "")}" placeholder="เช่น Account Manager, Creative Lead" class="${inpCls}"/></label>
+            <label class="flex flex-col gap-1">${lbl("โน้ต (Note)")}<input id="u-note" value="${esc(u.note || "")}" placeholder="บันทึกย่อ (ไม่บังคับ)" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 4 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
             <label class="flex flex-col gap-1">${lbl("ยืนยันรหัสผ่าน")}${pwInput("u-pass2", "พิมพ์รหัสผ่านอีกครั้ง")}</label>
           </div>
@@ -967,7 +1026,11 @@
     modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
     modal.querySelector("[data-save]").addEventListener("click", async () => {
       const full_name = modal.querySelector("#u-name").value.trim();
+      const email = modal.querySelector("#u-email").value.trim();
       const role = modal.querySelector("#u-role").value;
+      const organization = modal.querySelector("#u-org").value.trim();
+      const position = modal.querySelector("#u-position").value.trim();
+      const note = modal.querySelector("#u-note").value.trim();
       const pass = modal.querySelector("#u-pass").value;
       const pass2 = modal.querySelector("#u-pass2").value;
       if (pass || pass2) {
@@ -976,13 +1039,13 @@
       }
       try {
         if (existing) {
-          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, role }) });
+          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, email, role, organization, position, note }) });
           if (pass) await api("/auth/users/" + existing.id + "/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_password: pass }) });
           toast("อัปเดตผู้ใช้แล้ว");
         } else {
           const username = modal.querySelector("#u-user").value.trim();
           if (!pass) return toast("กรุณาตั้งรหัสผ่าน", "err");
-          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, password: pass, role }) });
+          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, email, password: pass, role, organization, position, note }) });
           toast("เพิ่มผู้ใช้แล้ว");
         }
         close(); onDone && onDone();
@@ -1205,10 +1268,9 @@
           ${field("engagement_rate", "Engagement %", d.engagement_rate ?? 0, "number")}
           ${field("growth_30d", "Growth 30d %", d.growth_30d ?? 0, "number")}
           <label class="flex flex-col gap-1"><span class="text-[12px] tracking-wide font-semibold text-on-surface-variant">Tier (ระดับอินฟลู)</span>
-            <select name="tier" data-tier class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[15px] focus:border-primary focus:ring-1 focus:ring-primary">
-              <option value="">Auto — จาก Followers</option>
-              ${TIERS.map((t) => `<option value="${t}" ${d.tier === t ? "selected" : ""}>${t}</option>`).join("")}
-            </select>
+            <input name="tier" data-tier list="tier-options" autocomplete="off" value="${esc(d.tier || "")}" placeholder="เว้นว่าง = Auto จาก Followers · หรือกรอกเอง"
+              class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[15px] focus:border-primary focus:ring-1 focus:ring-primary"/>
+            <datalist id="tier-options">${TIERS.map((t) => `<option value="${t}"></option>`).join("")}</datalist>
             <span data-tier-hint class="text-[11px] text-on-surface-variant"></span></label>
           ${sectionHead("payments", "ค่าใช้จ่าย · Pricing")}
           ${field("base_rate", "Base Rate ค่าตัว (฿)", d.base_rate ?? 0, "number")}
@@ -1380,16 +1442,21 @@
     avatarUrl.addEventListener("input", () => setAvatarPreview(avatarUrl.value.trim()));
 
     // --- Tier auto-hint (mirrors backend auto-derivation) ---
-    const tierSelect = modal.querySelector("[data-tier]");
+    const tierInput = modal.querySelector("[data-tier]");
     const tierHint = modal.querySelector("[data-tier-hint]");
     const followersInput = modal.querySelector('input[name="followers"]');
     const updateTierHint = () => {
       const auto = tierForFollowers(followersInput.value);
-      tierHint.textContent = tierSelect.value
-        ? `กำหนดเอง · auto = ${auto}`
-        : `จะเป็น ${auto} อัตโนมัติจาก ${fmtNum(followersInput.value)} followers`;
+      const v = tierInput.value.trim();
+      if (!v) {
+        tierHint.textContent = `จะเป็น ${auto} อัตโนมัติจาก ${fmtNum(followersInput.value)} followers`;
+      } else if (TIERS.some((t) => t.toLowerCase() === v.toLowerCase())) {
+        tierHint.textContent = `กำหนดเอง · auto = ${auto}`;
+      } else {
+        tierHint.textContent = `Tier กำหนดเอง: “${v}” · auto = ${auto}`;
+      }
     };
-    tierSelect.addEventListener("change", updateTierHint);
+    tierInput.addEventListener("input", updateTierHint);
     followersInput.addEventListener("input", updateTierHint);
     updateTierHint();
 
@@ -1492,10 +1559,18 @@
           </div>
           <h1 class="text-[20px] font-semibold mt-sm">เข้าสู่ระบบ</h1>
           ${message ? `<div class="text-[13px] text-error bg-error-container/40 rounded-lg px-sm py-2">${esc(message)}</div>` : ""}
+          <div id="google-signin" class="flex justify-center min-h-[42px]">
+            <button id="google-btn" type="button" class="w-full flex items-center justify-center gap-2 bg-white border border-outline-variant rounded-full py-2.5 font-semibold text-[14px] text-on-surface hover:bg-surface-container-low transition-colors">
+              <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              Sign in with Google
+            </button>
+          </div>
+          <div id="google-divider" class="flex items-center gap-2 text-[11px] text-on-surface-variant"><span class="flex-1 border-t border-outline-variant"></span>หรือเข้าด้วยบัญชีภายใน<span class="flex-1 border-t border-outline-variant"></span></div>
           <label class="flex flex-col gap-1"><span class="text-[12px] font-semibold text-on-surface-variant">Username</span>
             <input id="lg-user" class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 focus:border-primary focus:ring-1 focus:ring-primary" autocomplete="username"/></label>
           <label class="flex flex-col gap-1"><span class="text-[12px] font-semibold text-on-surface-variant">Password</span>
             ${pwInput("lg-pass", "")}</label>
+          <label class="flex items-center gap-2 text-[13px] text-on-surface-variant select-none cursor-pointer"><input type="checkbox" id="lg-remember" class="rounded accent-primary"/> จดจำ ID</label>
           <div id="lg-err" class="text-[13px] text-error min-h-[18px]"></div>
           <button id="lg-btn" class="bg-primary text-on-primary font-semibold rounded-lg py-2 hover:bg-primary-container shadow-sm flex items-center justify-center gap-1"><span class="material-symbols-outlined text-[20px]">login</span>เข้าสู่ระบบ</button>
           <div class="text-[12px] text-on-surface-variant bg-surface-container-low rounded-lg px-sm py-2 leading-relaxed">
@@ -1506,25 +1581,68 @@
     document.body.appendChild(overlay);
     const userI = overlay.querySelector("#lg-user");
     const passI = overlay.querySelector("#lg-pass");
+    const rememberC = overlay.querySelector("#lg-remember");
     const err = overlay.querySelector("#lg-err");
     const btn = overlay.querySelector("#lg-btn");
-    userI.focus();
+    // Remember ID: prefill the saved username (default on) so returning users only type the password.
+    const savedId = localStorage.getItem("ch_remember_id") || "";
+    rememberC.checked = true;
+    if (savedId) { userI.value = savedId; passI.focus(); } else { userI.focus(); }
     const submit = async () => {
       err.textContent = "";
       btn.disabled = true;
       try {
+        const username = userI.value.trim();
         const res = await fetch(API + "/auth/login", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: userI.value.trim(), password: passI.value }),
+          body: JSON.stringify({ username, password: passI.value }),
         });
         if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "เข้าสู่ระบบไม่สำเร็จ"); }
+        if (rememberC.checked) localStorage.setItem("ch_remember_id", username);
+        else localStorage.removeItem("ch_remember_id");
         setAuth(await res.json());
         overlay.remove();
+        location.hash = "#/assets";   // always land on the Campaigns suite right after logging in
         startApp();
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     };
     btn.addEventListener("click", submit);
     [userI, passI].forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); }));
+
+    // Google Sign-In. The custom button is always visible; if the backend has a
+    // client id configured we swap in the official Google button (real OAuth),
+    // otherwise clicking explains how an admin turns it on.
+    (async () => {
+      const mount = overlay.querySelector("#google-signin");
+      const customBtn = overlay.querySelector("#google-btn");
+      let cfg = {};
+      try { cfg = await (await fetch(API + "/auth/config")).json(); } catch (_) {}
+      const onCredential = async (resp) => {
+        err.textContent = "";
+        try {
+          const r = await fetch(API + "/auth/google", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential: resp.credential }),
+          });
+          if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "เข้าสู่ระบบด้วย Google ไม่สำเร็จ"); }
+          setAuth(await r.json()); overlay.remove(); location.hash = "#/assets"; startApp();
+        } catch (e) { err.textContent = e.message; }
+      };
+      if (cfg.google_client_id) {
+        const tryInit = (n = 0) => {
+          if (window.google?.accounts?.id) {
+            google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: onCredential });
+            mount.innerHTML = "";   // replace the placeholder with the official Google button
+            google.accounts.id.renderButton(mount, { theme: "outline", size: "large", width: 300, text: "signin_with", shape: "pill" });
+          } else if (n < 40) { setTimeout(() => tryInit(n + 1), 100); }
+        };
+        tryInit();
+      } else {
+        customBtn.addEventListener("click", () => {
+          err.textContent = "ยังไม่ได้เปิดใช้ Google Login — แอดมินต้องตั้งค่า GOOGLE_CLIENT_ID ในเซิร์ฟเวอร์ก่อน";
+        });
+      }
+    })();
   }
 
   function logout() {
@@ -1542,7 +1660,7 @@
         <span class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold text-[14px] font-poppins">${esc((u.full_name||u.username||"?")[0].toUpperCase())}</span>
         <span class="hidden sm:flex flex-col items-start leading-tight">
           <span class="text-[13px] font-semibold">${esc(u.full_name || u.username)}</span>
-          <span class="text-[11px] text-on-surface-variant">${u.role === "admin" ? "ผู้ดูแล · Admin" : "ผู้ชม · Viewer"}</span>
+          <span class="text-[11px] text-on-surface-variant">${u.role === "admin" ? "ผู้ดูแล · Admin" : u.role === "manager" ? "ผู้จัดการ · Manager" : "ผู้ชม · Viewer"}</span>
         </span>
         <span class="material-symbols-outlined text-on-surface-variant text-[20px]">expand_more</span>
       </button>`;
@@ -1553,7 +1671,7 @@
         <div id="profile-menu" class="absolute right-0 top-12 w-56 bg-surface-container-lowest border border-outline-variant rounded-xl elevation-2 py-1 z-50">
           <div class="px-md py-2 border-b border-outline-variant">
             <div class="font-semibold text-[14px]">${esc(u.full_name || u.username)}</div>
-            <div class="text-[12px] text-on-surface-variant">@${esc(u.username)} · ${u.role === "admin" ? "Admin" : "Viewer"}</div>
+            <div class="text-[12px] text-on-surface-variant">@${esc(u.username)} · ${u.role === "admin" ? "Admin" : u.role === "manager" ? "Manager" : "Viewer"}</div>
           </div>
           <button data-route="#/settings" class="w-full text-left px-md py-2 text-[14px] hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px]">settings</span>Settings</button>
           <button data-route="#/support" class="w-full text-left px-md py-2 text-[14px] hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px]">help</span>Support</button>
@@ -1570,7 +1688,7 @@
   async function startApp() {
     setAuth(auth);                          // refresh body.is-viewer class
     renderProfileChip();
-    if (!location.hash) location.hash = "#/directory";
+    if (!location.hash) location.hash = "#/assets";   // land on the Campaigns suite after login
     render();
   }
 
@@ -1588,7 +1706,7 @@
   // Bridge for separate feature modules (e.g. content.js) — lets them register
   // routes and reuse helpers without modifying this file's logic.
   window.CH = {
-    route, render, api, uploadFile, el, esc, toast,
+    route, render, goBack, api, uploadFile, el, esc, toast,
     fmtNum, fmtMoney, mediaSrc, isAdmin,
     qs: (sel, root) => (root || document).querySelector(sel),
     get token() { return auth?.token || null; },

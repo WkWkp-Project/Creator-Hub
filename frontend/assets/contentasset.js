@@ -1,33 +1,30 @@
-/* Content Asset Suite — campaign overview (editorial theme). Separate module,
- * registers routes via window.CH. Phase 1: overview (image A) + campaign list.
- * Add/Edit/Drive-link modals + member directory arrive in later phases. */
+/* Content Asset Suite — CORE / connector.
+ *
+ * Owns the shared infrastructure and campaign-level concerns ONLY:
+ *   - shared helpers (modal, escapers, directory caches, money, saveAsset, roster)
+ *   - the campaign LIST route and the campaign DETAIL route
+ *   - campaign-level modals: Add / Edit / Handoff (report) / Brands
+ *
+ * Each SECTION of the detail view (A = Approved Input Files, B = KOL Plan,
+ * future C = ...) lives in its OWN file and self-registers through
+ * `window.CA.register({...})`. The detail route renders the header + summary,
+ * then loops the registered sections in order — so adding Section C is just a
+ * new file + one register() call, with no edits here.
+ */
 (() => {
   "use strict";
   const CH = window.CH;
   if (!CH) { console.error("contentasset.js: CH bridge missing"); return; }
   const { route, api, el, esc, toast, isAdmin, render, fmtNum, uploadFile, mediaSrc } = CH;
 
-  const NUM_COLORS = ["#2f5fd0", "#3a7d44", "#1a1a1a", "#c0552f"];
-  const SRC_LABEL = { google_drive: "GOOGLE DRIVE", uploaded: "UPLOADED", notion: "NOTION", none: "—" };
   const STATUS_LABEL = { draft: "Draft", active: "Active", paused: "Paused", completed: "Completed" };
-  const soon = (what) => toast(`${what} — มาในเฟสถัดไป`, "info");
 
   // Section A is a fixed 3-slot template; stored input_files fill each slot in order.
+  // Kept in core because the campaign LIST cards summarise the linked-file count.
   const SECTION_A_TITLES = ["Product Information", "KOL Plan", "KOL Brief"];
   const sectionAFiles = (a) => SECTION_A_TITLES.map((title, i) => ({
     ...((a.input_files || [])[i] || {}), title, n: String(i + 1).padStart(2, "0"),
   }));
-
-  // Persist a cover thumbnail onto one input-file slot (sends the full array).
-  async function saveSlotThumb(a, slotIndex, thumbUrl) {
-    const inputFiles = (a.input_files || []).map((f) => ({ ...f }));
-    while (inputFiles.length <= slotIndex) inputFiles.push({ key: "slot_" + inputFiles.length, linked: false });
-    inputFiles[slotIndex].thumb = thumbUrl;
-    await api("/assets/" + a.id, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input_files: inputFiles }),
-    });
-  }
 
   const inpCls = "w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[14px] focus:border-primary focus:ring-1 focus:ring-primary";
   const lbl = (t) => `<span class="text-[12px] font-semibold text-on-surface-variant">${t}</span>`;
@@ -60,7 +57,22 @@
   const brandName = (id) => brands.find((b) => b.id === id)?.name || "";
   const brandLogo = (id) => brands.find((b) => b.id === id)?.logo_url || "";
   const memberName = (id) => { const m = members.find((x) => x.id === id); return m ? m.name : ""; };
-  const adminMembers = () => members.filter((m) => m.role === "admin");
+  // Members who can be a campaign Lead — internal staff (admins + managers).
+  const adminMembers = () => members.filter((m) => m.role === "admin" || m.role === "manager");
+  // A campaign can have several responsible leads. Prefer the multi list; fall
+  // back to the legacy single field so older campaigns still show their lead.
+  const leadIdsOf = (a) => (a.responsible_member_ids && a.responsible_member_ids.length)
+    ? a.responsible_member_ids
+    : (a.responsible_member_id ? [a.responsible_member_id] : []);
+  const leadLabel = (a) => leadIdsOf(a).map(memberName).filter(Boolean).join(", ");
+  // Multi-select checklist of team members (admins) — used for picking the lead(s).
+  function respChecklistHtml(cls, selectedIds) {
+    const team = adminMembers();
+    if (!team.length) return `<div class="border border-outline-variant rounded-lg p-sm text-[12px] text-on-surface-variant">ยังไม่มีทีมงาน (admin/manager) — เพิ่มที่หน้าจัดการผู้ใช้</div>`;
+    return `<div class="max-h-40 overflow-y-auto border border-outline-variant rounded-lg p-sm flex flex-col gap-1">
+      ${team.map((x) => `<label class="flex items-center gap-sm text-[13px] cursor-pointer px-1 py-0.5 rounded hover:bg-surface-container-low"><input type="checkbox" class="${cls} accent-primary" value="${x.id}" ${selectedIds.includes(x.id) ? "checked" : ""}/><span class="truncate">${esc(x.name)}</span></label>`).join("")}
+    </div>`;
+  }
 
   // Editorial title treatment: highlight [bracketed] text + italicise the last word.
   function fancyTitle(name, emClass = "ca-em", itClass = "ca-it") {
@@ -69,6 +81,57 @@
     if (parts.length > 1) parts[parts.length - 1] = `<span class="${itClass}">${parts[parts.length - 1]}</span>`;
     return parts.join(" ");
   }
+
+  // ============================================================ CONNECTOR ===
+  // ---- Version log: keep up to 10 snapshots per campaign (admin can restore) ----
+  // Stored client-side (localStorage). Snapshots are captured on open + after each
+  // save, with bursts coalesced so rapid auto-saves don't flood the history.
+  const VERSION_CAP = 10;
+  let activeAssetRef = null;
+  const verKey = (id) => "ch_ver_" + id;
+  const loadVersions = (id) => { try { return JSON.parse(localStorage.getItem(verKey(id)) || "[]"); } catch (_) { return []; } };
+  const verFields = (a) => ({
+    campaign_name: a.campaign_name, client_name: a.client_name, brand_id: a.brand_id,
+    responsible_member_id: a.responsible_member_id, responsible_member_ids: a.responsible_member_ids,
+    period_start: a.period_start, period_end: a.period_end,
+    status: a.status, description: a.description, stakeholders: a.stakeholders, drive_folder_url: a.drive_folder_url,
+    input_files: a.input_files, kols: a.kols, sow_options: a.sow_options, influencer_ids: a.influencer_ids,
+  });
+  function recordVersion(a) {
+    if (!a || !a.id) return;
+    try {
+      const arr = loadVersions(a.id);
+      const data = JSON.parse(JSON.stringify(verFields(a)));
+      const now = Date.now();
+      const last = arr[arr.length - 1];
+      if (last && JSON.stringify(last.data) === JSON.stringify(data)) return;     // unchanged → skip
+      if (last && now - last.ts < 4000) arr[arr.length - 1] = { ts: now, data };   // coalesce a save burst
+      else arr.push({ ts: now, data });
+      while (arr.length > VERSION_CAP) arr.shift();
+      localStorage.setItem(verKey(a.id), JSON.stringify(arr));
+    } catch (_) {}
+  }
+
+  // Shared bridge for the section modules (ca-section-*.js). They register their
+  // section here and reuse these helpers instead of importing the core directly.
+  const CA = (window.CA = {
+    sections: [],
+    register(def) { this.sections.push(def); this.sections.sort((x, y) => (x.order || 99) - (y.order || 99)); },
+    // shared helpers
+    api, el, esc, toast, isAdmin, render, fmtNum, uploadFile, mediaSrc,
+    modal, inpCls, lbl, sectionAFiles,
+    money: (n) => "฿" + (Number(n) || 0).toLocaleString("en-US"),
+    saveAsset: (id, patch) => api("/assets/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
+      .then((res) => { try { if (activeAssetRef && activeAssetRef.id === id) recordVersion(activeAssetRef); } catch (_) {} return res; }),
+    // directory creators (fresh each call so newly-added creators show up)
+    roster: async () => { try { return (await api("/influencers?limit=200")).items; } catch (_) { return []; } },
+    // Per-campaign edit permission: admin (all) or a manager assigned to it.
+    canEdit: (a) => {
+      const u = CH.user || {};
+      if (u.role === "admin") return true;
+      return u.role === "manager" && Array.isArray(a && a.assigned_user_ids) && a.assigned_user_ids.includes(u.id);
+    },
+  });
 
   // ============================================================ LIST ROUTE ===
   route("assets", async (view) => {
@@ -90,12 +153,12 @@
     const card = (a) => {
       const slots = sectionAFiles(a);
       const linked = slots.filter((f) => f.linked).length;
-      const lead = memberName(a.responsible_member_id);
+      const lead = leadLabel(a);
       const c = el(`<div class="ca-card" style="cursor:pointer">
         <div class="ca-card-head">
           <div class="ca-label">${esc(a.client_name || "—")}</div>
           <div class="ca-card-title" style="font-family:'Poppins','Prompt',sans-serif;font-size:19px;margin-top:6px">${fancyTitle(a.campaign_name)}</div>
-          <div class="ca-synced" style="color:#9a9488;margin-top:8px">${esc(a.period_start)} → ${esc(a.period_end)}${lead ? " · 👤 " + esc(lead) : ""}</div>
+          <div class="ca-synced" style="color:#8a8a8f;margin-top:8px">${esc(a.period_start)} → ${esc(a.period_end)}${lead ? " · 👤 " + esc(lead) : ""}</div>
         </div>
         <div class="ca-card-foot">
           <span class="ca-unlinked" style="font-family:'Prompt','Poppins',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
@@ -122,7 +185,7 @@
 
     const renderGroups = (filterId) => {
       groupsHost.innerHTML = "";
-      if (!data.items.length) { groupsHost.innerHTML = `<div style="color:#9a9488">ยังไม่มีแคมเปญ</div>`; return; }
+      if (!data.items.length) { groupsHost.innerHTML = `<div style="color:#8a8a8f">ยังไม่มีแคมเปญ</div>`; return; }
       const ids = filterId === "all" ? orderedBrandIds : orderedBrandIds.filter((id) => String(id) === String(filterId));
       ids.forEach((bid) => {
         const heading = (bid && brandName(bid)) ? esc(brandName(bid)) : "No brand";
@@ -154,124 +217,103 @@
     wrap.querySelector("[data-brands]")?.addEventListener("click", () => openBrandsModal());
   });
 
-  // ======================================================== OVERVIEW ROUTE ===
+  // ========================================================== DETAIL ROUTE ===
+  // Header + summary, then each registered section (A, B, C, ...) in order.
   route("asset", async (view, id) => {
     const a = await api("/assets/" + id);
+    activeAssetRef = a; recordVersion(a);   // snapshot the opened state for the version log
     await loadDirectory();
-    const files = sectionAFiles(a);
-    const brand = brandName(a.brand_id), lead = memberName(a.responsible_member_id);
-    const linked = files.filter((f) => f.linked).length;
+    const brand = brandName(a.brand_id), lead = leadLabel(a);
     const lastSaved = (() => { try { return new Date(a.updated_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } })();
-
     const summaryItem = (label, value) => `<div class="ca-summary-item"><div class="ca-label">${label}</div><div class="ca-summary-v">${value}</div></div>`;
-    const cards = files.map((f, i) => {
-      const color = NUM_COLORS[i % NUM_COLORS.length];
-      const thumbSrc = f.thumb ? mediaSrc(f.thumb) : "";
-      const thumbInner = thumbSrc
-        ? `<img class="ca-thumb-img" src="${esc(thumbSrc)}" alt="${esc(f.title)}"/>
-           ${isAdmin() ? `<div class="ca-thumb-actions">
-             <button class="ca-thumb-btn" data-change="${i}" title="เปลี่ยนรูป"><span class="material-symbols-outlined" style="font-size:16px">photo_camera</span></button>
-             <button class="ca-thumb-btn" data-remove="${i}" title="ลบรูป"><span class="material-symbols-outlined" style="font-size:16px">delete</span></button>
-           </div>` : ""}`
-        : `<div class="ca-thumb-empty">
-             <span class="material-symbols-outlined" style="font-size:30px">add_photo_alternate</span>
-             <div class="ca-thumb-hint">${isAdmin() ? "อัปโหลดรูปหน้าปก" : "ยังไม่มีรูปหน้าปก"}</div>
-             <div class="ca-thumb-dim">อัตราส่วน 16:9 · แนะนำ 1280×720px · JPG/PNG/WebP</div>
-             ${isAdmin() ? `<button class="ca-thumb-up" data-up="${i}"><span class="material-symbols-outlined" style="font-size:16px">upload</span>เลือกรูป</button>` : ""}
-           </div>`;
-      return `<div class="ca-card">
-        <div class="ca-card-head">
-          <span class="ca-num" style="background:${color}">${esc(f.n || String(i + 1).padStart(2, "0"))}</span>
-          <div class="ca-card-title">${esc(f.title)}</div>
-          <div class="ca-synced">SYNCED: ${esc(f.synced || "—")}</div>
-          <span class="ca-src ca-src-${f.source || "none"}">${SRC_LABEL[f.source] || "—"}</span>
-        </div>
-        <div class="ca-thumb${thumbSrc ? " has-img" : ""}" data-slot="${i}">${thumbInner}</div>
-        <div class="ca-foot-2">
-          <span class="ca-status ${f.linked ? "is-linked" : "is-unlinked"}"><span class="material-symbols-outlined" style="font-size:15px">${f.linked ? "check_circle" : "radio_button_unchecked"}</span>${f.linked ? "Linked" : "Not linked"}</span>
-          <button class="ca-viewbtn" data-view="${esc(f.drive_url || "")}"><span class="material-symbols-outlined" style="font-size:16px">open_in_new</span>View File</button>
-        </div>
-      </div>`;
-    }).join("");
+    const admin = isAdmin();
+    const canEdit = CA.canEdit(a);   // admin, or a manager assigned to this campaign
 
     const wrap = el(`<div class="ca-root">
-      <button class="ca-back" data-back><span class="material-symbols-outlined text-[18px]">arrow_back</span>กลับไปหน้า Campaigns</button>
-      <div class="ca-overhead">
-        <h1 class="ca-title">${fancyTitle(a.campaign_name)}</h1>
-        ${isAdmin() ? `<div class="ca-actions">
-          <button class="ca-btn" data-edit><span class="material-symbols-outlined text-[18px]">edit</span>Edit Info</button>
-          <button class="ca-btn ca-btn-gold" data-handoff><span class="material-symbols-outlined text-[18px]">hexagon</span>Prepare Handoff</button>
-        </div>` : ""}
+      <div class="ca-hero">
+        <button class="ca-back" data-back><span class="material-symbols-outlined text-[18px]">arrow_back</span>ย้อนกลับ</button>
+        <div class="ca-hero-row">
+          <div class="ca-hero-main">
+            <div class="ca-hero-brandline">
+              <span class="ca-hero-client">${esc(a.client_name || "—")}</span>
+              ${brand ? `<span class="ca-dot"></span><span class="ca-hero-brand">${esc(brand)}</span>` : ""}
+              <span class="ca-chip">${(STATUS_LABEL[a.status] || a.status).toUpperCase()}</span>
+            </div>
+            <h1 class="ca-title ca-hero-title">${fancyTitle(a.campaign_name)}</h1>
+            <div class="ca-hero-meta">
+              ${lead ? `<span class="mi"><span class="material-symbols-outlined">person</span>${esc(lead)}</span>` : ""}
+              <span class="mi"><span class="material-symbols-outlined">calendar_month</span>${esc(a.period_start || "—")} → ${esc(a.period_end || "—")}</span>
+              <span class="mi"><span class="material-symbols-outlined">schedule</span>บันทึกล่าสุด ${lastSaved}</span>
+            </div>
+          </div>
+          ${canEdit ? `<div class="ca-hero-actions">
+            <button class="ca-btn" data-edit><span class="material-symbols-outlined text-[18px]">edit</span>Edit Info</button>
+            <button class="ca-btn ca-btn-gold" data-handoff><span class="material-symbols-outlined text-[18px]">hexagon</span>Prepare Handoff</button>
+          </div>` : ""}
+        </div>
       </div>
-      <div class="ca-summary">
-        ${summaryItem("Company", esc(a.client_name || "—"))}
-        ${summaryItem("Brand", brand ? esc(brand) : "—")}
-        ${summaryItem("Lead", lead ? esc(lead) : "—")}
-        ${summaryItem("Period", `${esc(a.period_start || "—")} → ${esc(a.period_end || "—")}`)}
-        ${summaryItem("Status", `<span class="ca-chip">${(STATUS_LABEL[a.status] || a.status).toUpperCase()}</span>`)}
-        ${summaryItem("Last saved", lastSaved)}
-      </div>
-      <div class="ca-sechead">
-        <span class="ca-secletter">A.</span>
-        <span class="ca-sectitle">Approved Input Files</span>
-        <span class="ca-linkcount">${linked} OF ${files.length} LINKED</span>
-        ${isAdmin() ? `<button class="ca-btn" data-drive><span class="material-symbols-outlined text-[18px]">link</span>Connect Drive</button>` : ""}
-      </div>
-      <div class="ca-cards ca-cards-3">${cards}</div>
-      <div class="ca-sechead">
-        <span class="ca-secletter">B.</span>
-        <span class="ca-sectitle">KOL Plan</span>
-        <span class="ca-linkcount">${(a.kols || []).length} KOLS</span>
-        ${isAdmin() ? `<button class="ca-btn" data-sow><span class="material-symbols-outlined text-[18px]">checklist</span>Manage SOW</button>
-        <button class="ca-btn ca-btn-gold" data-assign><span class="material-symbols-outlined text-[18px]">person_add</span>Assign KOL</button>` : ""}
-      </div>
-      <div id="ca-kol"></div>
+      <div id="ca-sections"></div>
     </div>`);
     view.appendChild(wrap);
 
-    // KOL plan table (creators pulled from the directory).
-    let roster = [];
-    try { roster = (await api("/influencers?limit=200")).items; } catch (_) {}
-    renderKolTable(wrap.querySelector("#ca-kol"), a, roster);
-
-    wrap.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
-      const url = b.getAttribute("data-view");
-      if (url) window.open(url, "_blank", "noopener");
-      else toast("ยังไม่ได้ลิงก์ไฟล์นี้", "info");
-    }));
-
-    // Thumbnail upload / change / delete (admin only).
-    const pickThumb = (slotIndex) => {
-      const inp = document.createElement("input");
-      inp.type = "file"; inp.accept = "image/png,image/jpeg,image/webp,image/gif";
-      inp.addEventListener("change", async () => {
-        const file = inp.files && inp.files[0];
-        if (!file) return;
-        try {
-          const { url } = await uploadFile("/uploads/campaign-media", file);
-          await saveSlotThumb(a, slotIndex, url);
-          toast("อัปโหลดรูปหน้าปกแล้ว"); render();
-        } catch (e) { toast(e.message, "err"); }
-      });
-      inp.click();
-    };
-    wrap.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => pickThumb(+b.getAttribute("data-up"))));
-    wrap.querySelectorAll("[data-change]").forEach((b) => b.addEventListener("click", () => pickThumb(+b.getAttribute("data-change"))));
-    wrap.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
-      if (!confirm("ลบรูปหน้าปกนี้?")) return;
-      try { await saveSlotThumb(a, +b.getAttribute("data-remove"), ""); toast("ลบรูปแล้ว"); render(); }
-      catch (e) { toast(e.message, "err"); }
-    }));
-
-    wrap.querySelector("[data-back]")?.addEventListener("click", () => (location.hash = "#/assets"));
+    wrap.querySelector("[data-back]")?.addEventListener("click", () => CH.goBack("#/assets"));
     wrap.querySelector("[data-edit]")?.addEventListener("click", () => openEditModal(a));
     wrap.querySelector("[data-handoff]")?.addEventListener("click", () => openHandoffModal(a));
-    wrap.querySelector("[data-drive]")?.addEventListener("click", () => openDriveModal(a));
-    wrap.querySelector("[data-assign]")?.addEventListener("click", () => openAssignKolModal(a, roster));
-    wrap.querySelector("[data-sow]")?.addEventListener("click", () => openSowModal(a));
+
+    // Render each registered section: a consistent header (letter + title + count
+    // + declared action buttons) followed by the section's own body.
+    const host = wrap.querySelector("#ca-sections");
+    const ctx = { brand, lead, canEdit };
+    for (const sec of CA.sections) {
+      const head = el(`<div class="ca-sechead">
+        <span class="ca-secletter">${sec.letter}</span>
+        <span class="ca-sectitle">${esc(sec.title)}</span>
+        <span class="ca-linkcount">${sec.count ? sec.count(a, ctx) : ""}</span>
+      </div>`);
+      // A header item is either a button (default) or a {select} dropdown.
+      const headerItem = (it) => {
+        if (it.select) {
+          const s = el(`<select class="ca-hdr-select">${it.options.map((o) => `<option value="${esc(o.value)}" ${o.value === it.value ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`);
+          s.addEventListener("change", () => it.onChange(s.value));
+          return s;
+        }
+        const b = el(`<button class="ca-btn${it.gold ? " ca-btn-gold" : ""}"><span class="material-symbols-outlined text-[18px]">${it.icon}</span>${esc(it.label)}</button>`);
+        b.addEventListener("click", it.onClick);
+        return b;
+      };
+      // View controls (everyone) then admin-only actions.
+      if (sec.controls) sec.controls(a, ctx).forEach((it) => head.appendChild(headerItem(it)));
+      if (canEdit && sec.actions) sec.actions(a, ctx).forEach((it) => head.appendChild(headerItem(it)));
+      const body = el(`<div></div>`);
+      host.append(head, body);
+      try { await sec.render(body, a, ctx); }
+      catch (e) { body.appendChild(el(`<div class="text-error p-md">Section ${esc(sec.title)} error: ${esc(e.message)}</div>`)); }
+    }
   });
 
   // ============================================================== MODALS ===
+  // Company → Brand → Campaign consistency: when a campaign is put under a brand
+  // that has a Company, the Company field is auto-filled from that brand and
+  // locked (read-only). Picking "none" or a brand without a company frees it.
+  function wireBrandCompany(brandSel, clientInp) {
+    if (!brandSel || !clientInp) return;
+    const apply = () => {
+      const b = brands.find((x) => String(x.id) === brandSel.value);
+      if (b && b.company) {
+        clientInp.value = b.company;
+        clientInp.readOnly = true;
+        clientInp.classList.add("opacity-70", "cursor-not-allowed");
+        clientInp.title = "บริษัทดึงจากแบรนด์ \"" + b.name + "\" อัตโนมัติ — แก้ที่หน้า Manage Brands";
+      } else {
+        clientInp.readOnly = false;
+        clientInp.classList.remove("opacity-70", "cursor-not-allowed");
+        clientInp.title = "";
+      }
+    };
+    brandSel.addEventListener("change", apply);
+    apply();
+  }
+
   async function openAddModal() {
     await loadDirectory();
     const u = CH.user || {};
@@ -282,10 +324,8 @@
         <label class="flex flex-col gap-1">${lbl("Company Name (ชื่อบริษัทลูกค้า)")}<input id="ad-client" class="${inpCls}" placeholder="e.g. Ocean Bites Co., Ltd."/></label>
         <label class="flex flex-col gap-1">${lbl("Brand")}<select id="ad-brand" class="${inpCls}"><option value="">— none —</option>${brands.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select></label>
       </div>
-      <div class="grid grid-cols-2 gap-sm">
-        <label class="flex flex-col gap-1">${lbl("Campaign Name *")}<input id="ad-camp" class="${inpCls}" placeholder="e.g. Songkran 2026"/></label>
-        <label class="flex flex-col gap-1">${lbl("ผู้รับผิดชอบ (Lead)")}<select id="ad-resp" class="${inpCls}"><option value="">— none —</option>${adminMembers().map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></label>
-      </div>
+      <label class="flex flex-col gap-1">${lbl("Campaign Name *")}<input id="ad-camp" class="${inpCls}" placeholder="e.g. Songkran 2026"/></label>
+      <label class="flex flex-col gap-1">${lbl("ผู้รับผิดชอบ (Lead) — เลือกได้หลายคน")}${respChecklistHtml("ad-resp", [])}</label>
       <label class="flex flex-col gap-1">${lbl("Client Drive Folder URL *")}<input id="ad-drive" class="${inpCls}" placeholder="https://drive.google.com/drive/folders/..."/>
         <small class="text-[11px] text-on-surface-variant">โฟลเดอร์ Drive ที่เก็บ JSON + media ของแคมเปญนี้ · กันข้อมูลข้ามกัน</small></label>
       <div class="grid grid-cols-2 gap-sm">
@@ -294,6 +334,7 @@
       </div>`, `
       <button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
       <button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container">Create Campaign</button>`);
+    wireBrandCompany(m.querySelector("#ad-brand"), m.querySelector("#ad-client"));
     m.querySelector("[data-save]").addEventListener("click", async () => {
       const campaign_name = m.querySelector("#ad-camp").value.trim();
       const drive = m.querySelector("#ad-drive").value.trim();
@@ -301,12 +342,13 @@
       if (!drive) return toast("Client Drive Folder URL จำเป็น", "err");
       try {
         const brandVal = m.querySelector("#ad-brand").value;
-        const respVal = m.querySelector("#ad-resp").value;
+        const respIds = [...m.querySelectorAll(".ad-resp:checked")].map((c) => +c.value);
         const created = await api("/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-          owner_name: u.full_name || u.username || "", owner_email: u.username || "",
+          owner_name: u.full_name || u.username || "", owner_email: u.email || u.username || "",
           client_name: m.querySelector("#ad-client").value.trim(), campaign_name, drive_folder_url: drive,
           period_start: m.querySelector("#ad-start").value.trim(), period_end: m.querySelector("#ad-end").value.trim(),
-          brand_id: brandVal ? Number(brandVal) : null, responsible_member_id: respVal ? Number(respVal) : null,
+          brand_id: brandVal ? Number(brandVal) : null,
+          responsible_member_ids: respIds, responsible_member_id: respIds[0] || null,
         }) });
         toast("สร้างแคมเปญแล้ว"); m.remove(); location.hash = "#/asset/" + created.id;
       } catch (e) { toast(e.message, "err"); }
@@ -315,6 +357,16 @@
 
   async function openEditModal(a) {
     await loadDirectory();
+    const admin = isAdmin();
+    let assignUsers = [];
+    if (admin) { try { assignUsers = await api("/auth/users"); } catch (_) {} }   // ทุกคนในระบบ (จากจัดการผู้ใช้)
+    const accessHtml = admin ? `
+      <div class="flex flex-col gap-1">${lbl("🔐 สิทธิ์เข้าถึงแคมเปญ — Manager แก้ไขได้ · Viewer ดูได้")}
+        ${assignUsers.length ? `<div class="relative"><span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span><input id="ed-acc-q" class="pl-9 ${inpCls}" placeholder="ค้นหาชื่อ / อีเมล / role..."/></div>` : ""}
+        <div id="ed-acc-box" class="max-h-56 overflow-y-auto border border-outline-variant rounded-lg p-sm flex flex-col gap-1">
+          ${assignUsers.length ? assignUsers.map((u) => `<label data-acc-s="${esc(`${u.full_name || u.username} ${u.email || ""} ${u.role}`.toLowerCase())}" class="flex items-center gap-sm text-[13px] cursor-pointer px-1 py-0.5 rounded hover:bg-surface-container-low"><input type="checkbox" class="ed-acc accent-primary" value="${u.id}" ${(a.assigned_user_ids || []).includes(u.id) ? "checked" : ""}/><span class="truncate flex-1">${esc(u.full_name || u.username)} <span class="text-on-surface-variant">· ${esc(u.role)}${u.role === "admin" ? " · เห็นทุกแคมเปญอยู่แล้ว" : ""}${u.email ? " · " + esc(u.email) : ""}</span></span></label>`).join("") : `<div class="text-[12px] text-on-surface-variant">ยังไม่มีผู้ใช้ในระบบ — เพิ่มที่หน้าจัดการผู้ใช้ก่อน</div>`}
+        </div>
+        <small class="text-[11px] text-on-surface-variant"><b id="ed-acc-count"></b> · เฉพาะแอดมินมอบสิทธิ์ได้ · คนที่ติ๊กจะเห็น/จัดการเฉพาะแคมเปญนี้ ไม่เห็นแคมเปญอื่น</small></div>` : "";
     const ownerMember = members.find((x) => (x.email || "").toLowerCase() === (a.owner_email || "").toLowerCase());
     const ownerRole = ownerMember?.role || "customer";
     const ownerRoleBadge = ownerRole === "admin"
@@ -325,10 +377,8 @@
         <label class="flex flex-col gap-1">${lbl("Company Name *")}<input id="ed-client" class="${inpCls}" value="${esc(a.client_name || "")}"/></label>
         <label class="flex flex-col gap-1">${lbl("Brand")}<select id="ed-brand" class="${inpCls}"><option value="">— none —</option>${brands.map((b) => `<option value="${b.id}" ${a.brand_id === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>
       </div>
-      <div class="grid grid-cols-2 gap-sm">
-        <label class="flex flex-col gap-1">${lbl("Campaign Name *")}<input id="ed-camp" class="${inpCls}" value="${esc(a.campaign_name || "")}"/></label>
-        <label class="flex flex-col gap-1">${lbl("ผู้รับผิดชอบ (Lead)")}<select id="ed-resp" class="${inpCls}"><option value="">— none —</option>${adminMembers().map((x) => `<option value="${x.id}" ${a.responsible_member_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
-      </div>
+      <label class="flex flex-col gap-1">${lbl("Campaign Name *")}<input id="ed-camp" class="${inpCls}" value="${esc(a.campaign_name || "")}"/></label>
+      <label class="flex flex-col gap-1">${lbl("ผู้รับผิดชอบ (Lead) — เลือกได้หลายคน")}${respChecklistHtml("ed-resp", leadIdsOf(a))}</label>
       <div class="grid grid-cols-2 gap-sm">
         <label class="flex flex-col gap-1">${lbl("📅 Period Start")}<input id="ed-start" class="${inpCls}" value="${esc(a.period_start || "")}" placeholder="e.g. May 2026"/></label>
         <label class="flex flex-col gap-1">${lbl("Period End")}<input id="ed-end" class="${inpCls}" value="${esc(a.period_end || "")}" placeholder="e.g. Aug 2026"/></label>
@@ -342,9 +392,10 @@
         <div class="grid gap-sm" style="grid-template-columns:1fr auto"><input id="ed-drive" class="${inpCls}" value="${esc(a.drive_folder_url || "")}" placeholder="https://drive.google.com/drive/folders/..."/>
         <button type="button" data-open class="px-md py-2 rounded-lg border border-outline-variant text-[13px] hover:bg-surface-container-low">Open ↗</button></div>
         <small class="text-[11px] text-on-surface-variant">ระบบจะสร้าง subfolder <code>wakuwaku-media-${a.id}/</code> ในนั้นให้อัตโนมัติเมื่ออัปไฟล์ (เฟส Drive)</small></label>
+      ${accessHtml}
     `, `
-      <button data-reset class="px-md py-2 rounded-lg font-semibold border border-amber-500 text-amber-600 hover:bg-amber-50">🔄 Reset</button>
-      <button data-del class="px-md py-2 rounded-lg font-semibold border border-error text-error hover:bg-error-container/40">🗑 Delete</button>
+      ${admin ? `<button data-reset class="px-md py-2 rounded-lg font-semibold border border-amber-500 text-amber-600 hover:bg-amber-50">🔄 Reset</button>
+      <button data-del class="px-md py-2 rounded-lg font-semibold border border-error text-error hover:bg-error-container/40">🗑 Delete</button>` : ""}
       <button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
       <button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container">💾 Save Changes</button>
     `);
@@ -352,24 +403,35 @@
     const upd = () => { count.textContent = `${desc.value.length} ตัวอักษร`; };
     desc.addEventListener("input", upd); upd();
     m.querySelector("[data-open]").addEventListener("click", () => { const u = m.querySelector("#ed-drive").value.trim(); if (u) window.open(u, "_blank", "noopener"); });
+    wireBrandCompany(m.querySelector("#ed-brand"), m.querySelector("#ed-client"));
+    if (admin) {   // searchable access picker + live selected-count (scales to many users)
+      const accQ = m.querySelector("#ed-acc-q"), accBox = m.querySelector("#ed-acc-box"), accCount = m.querySelector("#ed-acc-count");
+      const updAccCount = () => { if (accCount) accCount.textContent = "เลือก " + m.querySelectorAll(".ed-acc:checked").length + " คน"; };
+      accQ?.addEventListener("input", () => { const q = accQ.value.trim().toLowerCase(); accBox.querySelectorAll("[data-acc-s]").forEach((l) => { l.style.display = l.dataset.accS.includes(q) ? "" : "none"; }); });
+      accBox?.addEventListener("change", updAccCount);
+      updAccCount();
+    }
     m.querySelector("[data-save]").addEventListener("click", async () => {
       const campaign_name = m.querySelector("#ed-camp").value.trim();
       if (!campaign_name) return toast("Campaign Name จำเป็น", "err");
       try {
         const brandVal = m.querySelector("#ed-brand").value;
-        const respVal = m.querySelector("#ed-resp").value;
-        await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        const respIds = [...m.querySelectorAll(".ed-resp:checked")].map((c) => +c.value);
+        const body = {
           client_name: m.querySelector("#ed-client").value.trim(), campaign_name,
           period_start: m.querySelector("#ed-start").value.trim(), period_end: m.querySelector("#ed-end").value.trim(),
           status: m.querySelector("#ed-status").value,
           description: desc.value, stakeholders: m.querySelector("#ed-stake").value,
           drive_folder_url: m.querySelector("#ed-drive").value.trim(),
-          brand_id: brandVal ? Number(brandVal) : null, responsible_member_id: respVal ? Number(respVal) : null,
-        }) });
+          brand_id: brandVal ? Number(brandVal) : null,
+          responsible_member_ids: respIds, responsible_member_id: respIds[0] || null,
+        };
+        if (admin) body.assigned_user_ids = [...m.querySelectorAll(".ed-acc:checked")].map((c) => +c.value);
+        await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         toast("บันทึกแล้ว"); m.remove(); render();
       } catch (e) { toast(e.message, "err"); }
     });
-    m.querySelector("[data-reset]").addEventListener("click", async () => {
+    m.querySelector("[data-reset]")?.addEventListener("click", async () => {
       if (!confirm("Reset แคมเปญ? (ล้าง brief/tags/stakeholders, สถานะ→draft, ยกเลิกลิงก์ไฟล์ทั้งหมด — ชื่อยังอยู่)")) return;
       const files = (a.input_files || []).map((f) => ({ ...f, drive_url: "", linked: false }));
       try {
@@ -378,7 +440,7 @@
         toast("รีเซ็ตแล้ว"); m.remove(); render();
       } catch (e) { toast(e.message, "err"); }
     });
-    m.querySelector("[data-del]").addEventListener("click", async () => {
+    m.querySelector("[data-del]")?.addEventListener("click", async () => {
       if (!confirm(`ลบแคมเปญ "${a.campaign_name}"? (ลบถาวร)`)) return;
       try { await api("/assets/" + a.id, { method: "DELETE" }); toast("ลบแล้ว"); m.remove(); location.hash = "#/assets"; }
       catch (e) { toast(e.message, "err"); }
@@ -432,7 +494,7 @@
       <button data-close class="px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
       <button data-html class="ml-auto px-md py-2 rounded-lg font-semibold border border-outline-variant hover:bg-surface-container-low">💾 Save as HTML</button>
       <button data-zip class="px-md py-2 rounded-lg font-semibold border border-outline-variant hover:bg-surface-container-low">📥 Download JSON</button>
-      <button data-finalize class="px-md py-2 rounded-lg font-semibold text-white" style="background:#b8924f">📦 Finalize &amp; Hand Off</button>`;
+      <button data-finalize class="px-md py-2 rounded-lg font-semibold text-white" style="background:#e1121c">📦 Finalize &amp; Hand Off</button>`;
 
     const m = modal("Pre-Handoff Readiness Check", "inventory_2", body, foot, "max-w-2xl");
     const download = (content, type, name) => {
@@ -445,9 +507,7 @@
       const btn = m.querySelector("[data-html]"); const old = btn.innerHTML;
       btn.disabled = true; btn.innerHTML = "⏳ กำลังสร้าง...";
       try {
-        let roster = [];
-        try { roster = (await api("/influencers?limit=200")).items; } catch (_) {}
-        download(buildReportHtml(a, files, brand, roster), "text/html;charset=utf-8", folder + "-report.html");
+        download(await buildReportHtml(a, brand), "text/html;charset=utf-8", folder + "-report.html");
         toast("บันทึกรายงาน HTML แล้ว ✓");
       } catch (e) { toast(e.message, "err"); }
       finally { btn.disabled = false; btn.innerHTML = old; }
@@ -467,41 +527,20 @@
     });
   }
 
-  // Self-contained, client-shareable HTML report of the campaign + KOL plan.
-  function buildReportHtml(a, files, brand, roster) {
+  // Self-contained, client-shareable HTML report. The document shell + meta live
+  // here; each registered section contributes its own fragment via reportHtml(),
+  // so Section C's report appears automatically once it registers one.
+  async function buildReportHtml(a, brand) {
     const e = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-    const baht = (n) => "฿" + (Number(n) || 0).toLocaleString("en-US");
-    const MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const d1 = (s) => { if (!s) return ""; const p = String(s).split("-"); return p.length < 3 ? e(s) : `${+p[2]} ${MON[+p[1]] || ""}`; };
-    const range = (k) => { const f = d1(k.period_from), t = d1(k.period_to); return f || t ? `${f || "…"} – ${t || "…"}` : "—"; };
-    const nameOf = (k) => (roster.find((r) => r.id === k.influencer_id) || {}).name || k.name || ("#" + k.influencer_id);
-    const linkTxt = (u) => { u = (u || "").trim(); if (!u) return "—"; return `<a href="${e(u)}" target="_blank" rel="noopener">เปิดโพสต์ ↗</a>`; };
-    const kols = (a.kols || []);
-    const tot = (f) => kols.reduce((s, k) => s + (Number(k[f]) || 0), 0);
-    const grand = tot("rate") + tot("gen_code_price") + tot("boosting_cost");
-    const TIER_ORDER = ["Mega", "Micro", "Nano"];
-    const ordered = kols.map((k, i) => ({ k, i })).sort((x, y) => {
-      const rank = (t) => { const ix = TIER_ORDER.indexOf(t || ""); return ix < 0 ? 99 : ix; };
-      return rank(x.k.tier) - rank(y.k.tier);
-    });
-    const rows = ordered.map(({ k }, n) => `<tr>
-      <td class="c">${n + 1}</td><td class="c">${e(k.month) || "—"}</td>
-      <td class="c">${k.tier ? `<span class="tier t-${e(k.tier)}">${e(k.tier)}</span>` : "—"}</td>
-      <td>${e(k.kol_type) || "—"}</td><td class="b">${e(nameOf(k))}</td>
-      <td>${(k.sow || []).length ? (k.sow || []).map(e).join(", ") : "—"}</td>
-      <td>${e(k.product_focus) || "—"}</td><td class="c">${e(k.client_approved || "Pending")}</td>
-      <td class="c">${e(k.post_date) || "—"}</td><td>${linkTxt(k.link)}</td>
-      <td class="n">${baht(k.rate)}</td><td class="n">${baht(k.gen_code_price)}</td><td class="n">${baht(k.boosting_cost)}</td>
-      <td class="c">${e(k.objective) || "—"}</td><td class="c">${range(k)}</td>
-      <td>${e(k.conditions) || "—"}</td><td>${e(k.caption) || "—"}</td></tr>`).join("");
-    const fileRows = files.map((f) => `<tr><td class="b">${e(f.title)}</td><td>${f.linked ? "✅ Linked" : "⬜ Not linked"}</td><td>${f.drive_url ? `<a href="${e(f.drive_url)}" target="_blank" rel="noopener">เปิด ↗</a>` : "—"}</td></tr>`).join("");
     const meta = [["Client", a.client_name], ["Brand", brand || "—"], ["Period", `${a.period_start || "—"} → ${a.period_end || "—"}`], ["Status", (a.status || "draft").toUpperCase()]];
+    let sectionsHtml = "";
+    for (const sec of CA.sections) if (sec.reportHtml) sectionsHtml += await sec.reportHtml(a, { brand });
     return `<!doctype html><html lang="th"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${e(a.campaign_name)} — KOL Plan</title>
+<title>${e(a.campaign_name)} — Campaign Report</title>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;700;800&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet"/>
 <style>
-:root{--ink:#1a1a1a;--mut:#6b6457;--line:#e9e3d6;--gold:#b8924f;--bg:#faf8f3;}
+:root{--ink:#1a1a1a;--mut:#52525b;--line:#e8e8ea;--gold:#e1121c;--bg:#fafafa;}
 *{box-sizing:border-box;}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:'Prompt','Poppins',system-ui,sans-serif;padding:40px;}
 .wrap{max-width:1200px;margin:0 auto;}
@@ -509,361 +548,34 @@ h1{font-family:'Poppins','Prompt',sans-serif;font-size:30px;font-weight:800;marg
 .sub{color:var(--mut);font-size:14px;margin-bottom:24px;}
 .meta{display:flex;flex-wrap:wrap;gap:14px 40px;padding:18px 22px;background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:30px;}
 .meta div{display:flex;flex-direction:column;gap:3px;}
-.meta .l{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9a9488;font-weight:600;}
+.meta .l{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8a8a8f;font-weight:600;}
 .meta .v{font-size:15px;font-weight:600;}
 h2{font-family:'Poppins','Prompt',sans-serif;font-size:18px;font-weight:700;margin:28px 0 12px;}
 h2 .em{color:var(--gold);font-style:italic;margin-right:6px;}
 .panel{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;}
 table{border-collapse:collapse;width:100%;font-size:12.5px;}
-th{background:#faf8f3;text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#9a9488;font-weight:700;padding:11px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
-td{padding:9px 10px;border-bottom:1px solid #f1ede4;vertical-align:top;}
+th{background:#fafafa;text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#8a8a8f;font-weight:700;padding:11px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
+td{padding:9px 10px;border-bottom:1px solid #f0f0f1;vertical-align:top;}
 tr:last-child td{border-bottom:0;}
 .c{text-align:center;white-space:nowrap;}.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;}.b{font-weight:700;}
 a{color:#0058be;text-decoration:none;}a:hover{text-decoration:underline;}
 .tier{display:inline-block;font-weight:700;font-size:11px;padding:3px 8px;border-radius:999px;}
 .t-Nano{background:#e7eefe;color:#0058be;}.t-Micro{background:#fff0d6;color:#9a6700;}.t-Mega{background:#ffd9e2;color:#b90538;}
-.tot{display:flex;flex-wrap:wrap;gap:28px;justify-content:flex-end;align-items:center;padding:16px 22px;border-top:1px solid #f1ede4;background:#fdfcf9;}
+.tot{display:flex;flex-wrap:wrap;gap:28px;justify-content:flex-end;align-items:center;padding:16px 22px;border-top:1px solid #f0f0f1;background:#fcfcfd;}
 .tot .item{display:flex;flex-direction:column;gap:2px;text-align:right;}
-.tot .l{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9a9488;font-weight:600;}
+.tot .l{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8a8a8f;font-weight:600;}
 .tot .v{font-size:16px;font-weight:700;font-family:'Poppins','Prompt',sans-serif;}
 .tot .grand{padding-left:28px;border-left:1px solid var(--line);}
-.tot .grand .l{color:#b08a4a;}.tot .grand .v{font-size:22px;font-weight:800;color:var(--gold);}
-.foot{margin-top:26px;color:#9a9488;font-size:11px;text-align:center;}
+.tot .grand .l{color:#e1121c;}.tot .grand .v{font-size:22px;font-weight:800;color:var(--gold);}
+.foot{margin-top:26px;color:#8a8a8f;font-size:11px;text-align:center;}
 @media print{body{padding:0;background:#fff;}.panel,.meta{box-shadow:none;}}
 </style></head><body><div class="wrap">
 <h1>${e(a.campaign_name)}</h1>
-<div class="sub">KOL Plan Report${a.client_name ? " · " + e(a.client_name) : ""}</div>
+<div class="sub">Campaign Report${a.client_name ? " · " + e(a.client_name) : ""}</div>
 <div class="meta">${meta.map(([l, v]) => `<div><span class="l">${e(l)}</span><span class="v">${e(v || "—")}</span></div>`).join("")}</div>
-<h2><span class="em">A.</span>Approved Input Files</h2>
-<div class="panel"><table><thead><tr><th>File</th><th>Status</th><th>Link</th></tr></thead><tbody>${fileRows || `<tr><td colspan="3">—</td></tr>`}</tbody></table></div>
-<h2><span class="em">B.</span>KOL Plan <span style="color:#9a9488;font-weight:600;font-size:13px">· ${kols.length} KOL</span></h2>
-<div class="panel"><table><thead><tr>
-<th>#</th><th>Month</th><th>Tier</th><th>Type</th><th>KOL</th><th>SOW</th><th>Product Focus</th><th>Approved</th><th>Post Date</th><th>Link</th><th class="n">ค่าตัว</th><th class="n">Gen Code</th><th class="n">Boosting</th><th>Obj.</th><th>Period</th><th>Conditions</th><th>Caption</th>
-</tr></thead><tbody>${rows || `<tr><td colspan="17" class="c">ยังไม่มี KOL</td></tr>`}</tbody></table>
-<div class="tot">
-<div class="item"><span class="l">ค่าตัว</span><span class="v">${baht(tot("rate"))}</span></div>
-<div class="item"><span class="l">Gen Code</span><span class="v">${baht(tot("gen_code_price"))}</span></div>
-<div class="item"><span class="l">Boosting</span><span class="v">${baht(tot("boosting_cost"))}</span></div>
-<div class="item grand"><span class="l">Total Budget</span><span class="v">${baht(grand)}</span></div>
-</div></div>
+${sectionsHtml}
 <div class="foot">Generated by Creator Hub · ${e(a.campaign_name)}</div>
 </div></body></html>`;
-  }
-
-  function openDriveModal(a) {
-    const files = sectionAFiles(a).filter((f) => f.key);
-    const body = files.map((f, i) => `<label class="flex flex-col gap-1">${lbl(`${f.n || String(i + 1).padStart(2, "0")} - ${esc(f.title)}`)}<input data-link="${esc(f.key)}" class="${inpCls}" value="${esc(f.drive_url || "")}" placeholder="https://drive.google.com/drive/folders/..."/></label>`).join("");
-    const m = modal("Update Drive Links", "link", body, `
-      <button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
-      <button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container">Save Links</button>`);
-    m.querySelector("[data-save]").addEventListener("click", async () => {
-      const links = {};
-      m.querySelectorAll("[data-link]").forEach((inp) => { links[inp.getAttribute("data-link")] = inp.value.trim(); });
-      try { await api("/assets/" + a.id + "/drive-links", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(links) }); toast("บันทึกลิงก์แล้ว"); m.remove(); render(); }
-      catch (e) { toast(e.message, "err"); }
-    });
-  }
-
-  // ====================================================== KOL PLAN (Section B) ===
-  const money = (n) => "฿" + (Number(n) || 0).toLocaleString("en-US");
-
-  async function saveKols(a, kols) {
-    a.kols = kols;
-    await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kols }) });
-  }
-
-  function renderKolTable(host, a, roster) {
-    const admin = isAdmin();
-    const kols = a.kols || [];
-    const inf = (id) => roster.find((r) => r.id === id) || {};
-    const TIERS = ["", "Nano", "Micro", "Mega"];
-    const APPROVE = ["Pending", "Posted", "Approve"];
-    const OBJ = ["Awareness", "Consideration", "Conversion"];
-    const ro = admin ? "" : "disabled";
-
-    if (!kols.length) {
-      host.innerHTML = `<div class="kol-panel"><div class="kol-empty"><span class="material-symbols-outlined">groups</span><span>ยังไม่มี KOL ในแคมเปญนี้${admin ? ' — กด "Assign KOL" เพื่อเพิ่ม' : ""}</span></div></div>`;
-      return;
-    }
-
-    const sel = (f, val, opts, cls = "kol-in sm") => `<select class="${cls}" data-f="${f}" ${ro}>${opts.map((o) => `<option ${String(val) === String(o) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
-    const txt = (f, val, cls = "kol-in") => `<input class="${cls}" data-f="${f}" value="${esc(val ?? "")}" ${ro}/>`;
-    // Budget fields are text (not number) so they can show thousands separators
-    // ("120,000"); a text input with no [type] also escapes the forms-plugin border.
-    const num = (f, val) => `<input class="kol-in num" inputmode="numeric" data-f="${f}" data-money value="${val === "" || val == null ? "" : Number(val).toLocaleString("en-US")}" ${ro}/>`;
-    const eye = (f, on) => `<button class="kol-eye ${on ? "on" : ""}" data-eye="${f}" title="โชว์/ซ่อนตอนส่งลูกค้า" ${ro}><span class="material-symbols-outlined text-[16px]">${on ? "visibility" : "visibility_off"}</span></button>`;
-
-    const MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const monthSel = (val) => `<select class="kol-in mon" data-f="month" ${ro}>${MONTHS.map((mo) => `<option value="${mo}" ${(val || "") === mo ? "selected" : ""}>${mo || "—"}</option>`).join("")}</select>`;
-    // Link shown as the post's platform icon (detected from the URL), opens in a
-    // new tab; edited via a small modal. Brand glyphs come from Font Awesome.
-    const PLATFORMS = [
-      { re: /(facebook\.com|fb\.com|fb\.watch|m\.facebook)/i, cls: "fa-brands fa-facebook", color: "#1877F2", label: "Facebook" },
-      { re: /(tiktok\.com|vt\.tiktok)/i, cls: "fa-brands fa-tiktok", color: "#111111", label: "TikTok" },
-      { re: /(instagram\.com|instagr\.am)/i, cls: "fa-brands fa-instagram", color: "#E4405F", label: "Instagram" },
-      { re: /(youtube\.com|youtu\.be)/i, cls: "fa-brands fa-youtube", color: "#FF0000", label: "YouTube" },
-      { re: /(twitter\.com|x\.com)/i, cls: "fa-brands fa-x-twitter", color: "#111111", label: "X" },
-      { re: /(line\.me|lin\.ee)/i, cls: "fa-brands fa-line", color: "#06C755", label: "LINE" },
-    ];
-    const platformOf = (url) => PLATFORMS.find((p) => p.re.test(url)) || { cls: "fa-solid fa-link", color: "#0058be", label: "เปิดลิงค์" };
-    const linkCell = (url) => {
-      const u = (url || "").trim();
-      const editBtn = admin ? `<button class="kol-linkedit" data-link-edit title="${u ? "แก้ไขลิงค์" : "ใส่ลิงค์"}"><span class="material-symbols-outlined text-[15px]">${u ? "edit" : "add_link"}</span></button>` : "";
-      if (!u) return `<div class="kol-linkcell">${admin ? editBtn : `<span style="color:#bcb5a4">—</span>`}</div>`;
-      const p = platformOf(u);
-      const link = `<a class="kol-plat" href="${esc(u)}" target="_blank" rel="noopener" title="${esc(p.label)} — เปิดโพสต์" style="color:${p.color}"><i class="${p.cls}"></i></a>`;
-      return `<div class="kol-linkcell">${link}${editBtn}</div>`;
-    };
-    // Period shown compactly (e.g. "1 Jun – 30 Jun"); edited via a start–end date modal.
-    const fmtD = (s) => { if (!s) return ""; const p = String(s).split("-"); return p.length < 3 ? esc(s) : `${+p[2]} ${MONTHS[+p[1]] || ""}`; };
-    const periodCell = (k) => {
-      const f = k.period_from, t = k.period_to, has = f || t;
-      const label = has ? `${fmtD(f) || "…"} – ${fmtD(t) || "…"}` : "";
-      if (!admin) return has ? `<span style="white-space:nowrap">${label}</span>` : `<span style="color:#bcb5a4">—</span>`;
-      return `<button class="kol-cellbtn" data-period-edit><span class="material-symbols-outlined text-[14px]">date_range</span>${has ? label : "ช่วงวันที่"}</button>`;
-    };
-
-    const rowHtml = (k, i) => {
-      const person = inf(k.influencer_id);
-      const name = person.name || k.name || ("#" + k.influencer_id);
-      const show = k.show || {};
-      const media = k.media || [];
-      const thumb = media.find((m) => m.url && m.type !== "video")?.url || media[0]?.url || (media[0]?.urls || [])[0] || "";
-      const dt = (f, val) => `<input class="kol-in dt" type="date" data-f="${f}" value="${esc(val ?? "")}" ${ro}/>`;
-      return `<tr data-i="${i}">
-        <td class="kol-rownum">${i + 1}</td>
-        <td>${monthSel(k.month)}</td>
-        <td>${sel("tier", k.tier ?? person.tier ?? "", TIERS)}</td>
-        <td>${txt("kol_type", k.kol_type ?? person.niche ?? "", "kol-in sm")}</td>
-        <td class="kol-name"><a href="#/influencer/${k.influencer_id}">${esc(name)}</a></td>
-        <td><button class="kol-cellbtn" data-sow-edit><span class="material-symbols-outlined text-[15px]">checklist</span>${(k.sow || []).length || "+"}</button></td>
-        <td>${txt("product_focus", k.product_focus, "kol-in md")}</td>
-        <td>${sel("client_approved", k.client_approved || "Pending", APPROVE)}</td>
-        <td>${dt("post_date", k.post_date)}</td>
-        <td>${linkCell(k.link)}</td>
-        <td><div class="kol-bcell">${num("rate", k.rate)}${eye("rate", show.rate !== false)}</div></td>
-        <td><div class="kol-bcell">${num("gen_code_price", k.gen_code_price)}${eye("gen_code_price", show.gen_code_price !== false)}</div></td>
-        <td><div class="kol-bcell">${num("boosting_cost", k.boosting_cost)}${eye("boosting_cost", show.boosting_cost !== false)}</div></td>
-        <td>${sel("objective", k.objective || "Awareness", OBJ, "kol-in obj")}</td>
-        <td>${periodCell(k)}</td>
-        <td><button class="kol-cellbtn" data-cond-edit title="เงื่อนไข">${k.conditions ? '<span class="material-symbols-outlined text-[15px]" style="color:#b8924f">sticky_note_2</span>' : '<span class="material-symbols-outlined text-[15px]">add</span>'}</button></td>
-        <td><button class="kol-cellbtn" data-media-edit>${thumb ? `<img class="kol-thumb" src="${esc(mediaSrc(thumb))}"/>` : '<span class="material-symbols-outlined text-[15px]">image</span>'}${media.length ? ` ${media.length}` : ""}</button></td>
-        ${admin ? `<td><button class="kol-remove" data-remove title="ลบ"><span class="material-symbols-outlined text-[18px]">delete</span></button></td>` : ""}
-      </tr>`;
-    };
-
-    // Group rows by tier so the table is easy to scan (Mega → Micro → Nano → unspecified).
-    const TIER_ORDER = ["Mega", "Micro", "Nano"];
-    const effTier = (k) => k.tier || inf(k.influencer_id).tier || "";
-    const groups = {};
-    kols.forEach((k, i) => { const t = effTier(k) || "—"; (groups[t] = groups[t] || []).push(i); });
-    const tierKeys = TIER_ORDER.filter((t) => groups[t])
-      .concat(Object.keys(groups).filter((t) => !TIER_ORDER.includes(t)).sort());
-    const colspan = admin ? 18 : 17;
-    const rows = tierKeys.map((t) => {
-      const head = t === "—" ? `<span class="kol-gname">ไม่ระบุ Tier</span>` : `<span class="tier-chip tier-${t}">${t}</span>`;
-      const body = groups[t].map((i) => rowHtml(kols[i], i)).join("");
-      return `<tr class="kol-group"><td colspan="${colspan}">${head}<span class="kol-gcount">${groups[t].length} KOL</span></td></tr>${body}`;
-    }).join("");
-
-    const tot = (f) => kols.reduce((s, k) => s + (Number(k[f]) || 0), 0);
-    host.innerHTML = `<div class="kol-panel">
-      <div class="kol-wrap"><table class="kol-table">
-      <thead><tr>
-        <th>#</th><th>Month</th><th>Tier</th><th>Type</th><th>KOL Name</th><th>SOW</th>
-        <th>Product Focus</th><th>Approved</th><th>Post Date</th><th>Link</th>
-        <th>ค่าตัว</th><th>Gen Code</th><th>Boosting</th><th>Obj.</th><th>Period</th>
-        <th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
-      </tr></thead>
-      <tbody>${rows}</tbody></table></div>
-      <div class="kol-foot">
-        <div class="kol-tot"><span class="l">ค่าตัว</span><span class="v">${money(tot("rate"))}</span></div>
-        <div class="kol-tot"><span class="l">Gen Code</span><span class="v">${money(tot("gen_code_price"))}</span></div>
-        <div class="kol-tot"><span class="l">Boosting</span><span class="v">${money(tot("boosting_cost"))}</span></div>
-        <div class="kol-tot kol-tot-budget"><span class="l">Total Budget</span><span class="v">${money(tot("rate") + tot("gen_code_price") + tot("boosting_cost"))}</span></div>
-      </div></div>`;
-
-    if (!admin) return;
-    let timer;
-    const sum = (f) => a.kols.reduce((s, k) => s + (Number(k[f]) || 0), 0);
-    const updateTotals = () => {
-      const vs = host.querySelectorAll(".kol-foot .v");
-      if (vs[0]) vs[0].textContent = money(sum("rate"));
-      if (vs[1]) vs[1].textContent = money(sum("gen_code_price"));
-      if (vs[2]) vs[2].textContent = money(sum("boosting_cost"));
-      if (vs[3]) vs[3].textContent = money(sum("rate") + sum("gen_code_price") + sum("boosting_cost"));
-    };
-    const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveKols(a, a.kols).catch((e) => toast(e.message, "err")), 600); };
-    host.querySelectorAll("[data-f]").forEach((inpEl) => {
-      const f = inpEl.getAttribute("data-f");
-      const money$ = inpEl.hasAttribute("data-money");
-      inpEl.addEventListener("input", () => {
-        const i = +inpEl.closest("tr").dataset.i;
-        if (money$) { // keep only digits; store the number, leave the field's display alone while typing
-          const digits = inpEl.value.replace(/[^\d]/g, "");
-          a.kols[i][f] = digits === "" ? "" : Number(digits);
-          updateTotals();
-          persist();
-          return;
-        }
-        a.kols[i][f] = inpEl.type === "number" ? (inpEl.value === "" ? "" : Number(inpEl.value)) : inpEl.value;
-        if (f === "tier") { // tier drives the grouping — save then re-render to regroup
-          clearTimeout(timer);
-          saveKols(a, a.kols).then(() => renderKolTable(host, a, roster)).catch((e) => toast(e.message, "err"));
-          return;
-        }
-        persist();
-      });
-      if (money$) { // edit on raw digits, settle back to comma-grouped on blur
-        inpEl.addEventListener("focus", () => { const v = a.kols[+inpEl.closest("tr").dataset.i][f]; inpEl.value = (v === "" || v == null) ? "" : String(v); });
-        inpEl.addEventListener("blur", () => { const v = a.kols[+inpEl.closest("tr").dataset.i][f]; inpEl.value = (v === "" || v == null) ? "" : Number(v).toLocaleString("en-US"); });
-      }
-    });
-    host.querySelectorAll("[data-eye]").forEach((b) => b.addEventListener("click", () => {
-      const i = +b.closest("tr").dataset.i, f = b.getAttribute("data-eye"), k = a.kols[i];
-      k.show = k.show || {}; k.show[f] = k.show[f] === false;
-      b.classList.toggle("on", k.show[f] !== false);
-      b.querySelector(".material-symbols-outlined").textContent = k.show[f] !== false ? "visibility" : "visibility_off";
-      persist();
-    }));
-    host.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
-      const i = +b.closest("tr").dataset.i;
-      if (!confirm(`ลบ ${inf(a.kols[i].influencer_id).name || "KOL"} ออกจากแคมเปญ?`)) return;
-      a.kols.splice(i, 1); await saveKols(a, a.kols); renderKolTable(host, a, roster);
-    }));
-    host.querySelectorAll("[data-link-edit]").forEach((b) => b.addEventListener("click", () => openKolLinkModal(a, +b.closest("tr").dataset.i, roster, host)));
-    host.querySelectorAll("[data-period-edit]").forEach((b) => b.addEventListener("click", () => openKolPeriodModal(a, +b.closest("tr").dataset.i, roster, host)));
-    host.querySelectorAll("[data-sow-edit]").forEach((b) => b.addEventListener("click", () => openKolSowModal(a, +b.closest("tr").dataset.i, roster, host)));
-    host.querySelectorAll("[data-cond-edit]").forEach((b) => b.addEventListener("click", () => openKolCondModal(a, +b.closest("tr").dataset.i, roster, host)));
-    host.querySelectorAll("[data-media-edit]").forEach((b) => b.addEventListener("click", () => openKolMediaModal(a, +b.closest("tr").dataset.i, roster, host)));
-  }
-
-  function openAssignKolModal(a, roster) {
-    const have = new Set((a.kols || []).map((k) => k.influencer_id));
-    const avail = roster.filter((r) => !have.has(r.id));
-    const body = `<div class="text-[12px] text-on-surface-variant">เลือกครีเอเตอร์จาก Directory (ดึงค่าตัวมา prefill งบให้)</div>
-      <input id="kpq" class="${inpCls}" placeholder="ค้นหา..."/>
-      <div class="max-h-80 overflow-y-auto border border-outline-variant rounded-lg p-sm flex flex-col gap-1">
-      ${avail.map((r) => `<label data-n="${esc((r.name || "").toLowerCase())}" class="flex items-center gap-sm px-sm py-1 rounded hover:bg-surface-container-low cursor-pointer text-[14px]"><input type="checkbox" class="kp" value="${r.id}"/><span class="truncate flex-1">${esc(r.name)} <span class="text-on-surface-variant">· ${fmtNum(r.followers)} · ${esc(r.tier || "")}</span></span></label>`).join("") || `<div class="text-[13px] text-on-surface-variant">เพิ่มครบทุกคนแล้ว</div>`}
-      </div>`;
-    const m = modal("Assign KOL", "person_add", body, `
-      <button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
-      <button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container">Add</button>`);
-    m.querySelector("#kpq").addEventListener("input", (e) => { const q = e.target.value.toLowerCase(); m.querySelectorAll("[data-n]").forEach((l) => { l.style.display = l.dataset.n.includes(q) ? "" : "none"; }); });
-    m.querySelector("[data-save]").addEventListener("click", async () => {
-      const ids = [...m.querySelectorAll(".kp:checked")].map((c) => +c.value);
-      if (!ids.length) { m.remove(); return; }
-      const kols = (a.kols || []).slice();
-      ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", sow: [], product_focus: "", client_approved: "Pending", post_date: "", link: "", rate: r.base_rate || 0, gen_code_price: r.code_gen_fee || 0, boosting_cost: 0, objective: "Awareness", period_from: "", period_to: "", conditions: "", caption: "", media: [], show: { rate: true, gen_code_price: true, boosting_cost: true } });
-      });
-      try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
-    });
-  }
-
-  function openKolSowModal(a, idx, roster, host) {
-    const k = a.kols[idx]; const sel = new Set(k.sow || []);
-    const opts = () => a.sow_options || [];
-    const body = `<div class="text-[12px] text-on-surface-variant">Scope of Work สำหรับ ${esc((roster.find((r) => r.id === k.influencer_id) || {}).name || "KOL")}</div>
-      <div id="sl" class="flex flex-col gap-1">${opts().map((o) => `<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(o)}" ${sel.has(o) ? "checked" : ""}/>${esc(o)}</label>`).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ — เพิ่มด้านล่าง</div>`}</div>
-      <div class="flex gap-sm"><input id="sn" class="${inpCls}" placeholder="เพิ่มรายการใหม่"/><button data-add class="px-md py-2 rounded-lg bg-primary text-on-primary shrink-0">+</button></div>`;
-    const m = modal("Scope of Work", "checklist", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
-    m.querySelector("[data-add]").addEventListener("click", async () => {
-      const v = m.querySelector("#sn").value.trim(); if (!v) return;
-      a.sow_options = [...opts(), v];
-      try { await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sow_options: a.sow_options }) }); } catch (e) { return toast(e.message, "err"); }
-      m.querySelector("#sl").appendChild(el(`<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(v)}" checked/>${esc(v)}</label>`));
-      m.querySelector("#sn").value = "";
-    });
-    m.querySelector("[data-save]").addEventListener("click", async () => {
-      k.sow = [...m.querySelectorAll(".sw:checked")].map((c) => c.value);
-      try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); }
-    });
-  }
-
-  function openKolPeriodModal(a, idx, roster, host) {
-    const k = a.kols[idx];
-    const who = (roster.find((r) => r.id === k.influencer_id) || {}).name || "KOL";
-    const body = `<div class="text-[12px] text-on-surface-variant">เลือกช่วงวันที่ของ ${esc(who)} (เริ่ม – จบ)</div>
-      <div class="flex items-end gap-sm">
-        <label class="flex flex-col gap-1 flex-1">${lbl("เริ่ม")}<input id="pf" type="date" class="${inpCls}" value="${esc(k.period_from || "")}"/></label>
-        <span class="pb-2 text-on-surface-variant material-symbols-outlined">arrow_forward</span>
-        <label class="flex flex-col gap-1 flex-1">${lbl("จบ")}<input id="pt" type="date" class="${inpCls}" value="${esc(k.period_to || "")}"/></label>
-      </div>`;
-    const m = modal("ช่วงวันที่ (Period)", "date_range", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-clear class="px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">ล้าง</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
-    m.querySelector("[data-clear]").addEventListener("click", () => { m.querySelector("#pf").value = ""; m.querySelector("#pt").value = ""; });
-    m.querySelector("[data-save]").addEventListener("click", async () => { k.period_from = m.querySelector("#pf").value; k.period_to = m.querySelector("#pt").value; try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); } });
-  }
-
-  function openKolLinkModal(a, idx, roster, host) {
-    const k = a.kols[idx];
-    const who = (roster.find((r) => r.id === k.influencer_id) || {}).name || "KOL";
-    const m = modal("Link Post", "link", `<label class="flex flex-col gap-1">${lbl(`ลิงค์โพสต์ของ ${esc(who)}`)}<input id="lk" class="${inpCls}" placeholder="https://..." value="${esc(k.link || "")}"/></label>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
-    const inp = m.querySelector("#lk"); inp.focus();
-    m.querySelector("[data-save]").addEventListener("click", async () => { k.link = inp.value.trim(); try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); } });
-  }
-
-  function openKolCondModal(a, idx, roster, host) {
-    const k = a.kols[idx];
-    const m = modal("KOL Conditions", "sticky_note_2", `<label class="flex flex-col gap-1">${lbl("เงื่อนไขเฉพาะ KOL คนนี้ (ถ้ามี)")}<textarea id="cd" rows="4" class="${inpCls}">${esc(k.conditions || "")}</textarea></label>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
-    m.querySelector("[data-save]").addEventListener("click", async () => { k.conditions = m.querySelector("#cd").value; try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); } });
-  }
-
-  function openKolMediaModal(a, idx, roster, host) {
-    const k = a.kols[idx]; k.media = k.media || [];
-    const item = (md, j) => `<div class="flex items-center gap-sm border border-outline-variant rounded-lg p-sm">
-      ${md.type === "video" ? `<span class="material-symbols-outlined text-primary">movie</span>` : md.type === "album" ? `<span class="material-symbols-outlined text-primary">photo_library</span>` : `<img src="${esc(mediaSrc(md.url || ""))}" class="kol-thumb"/>`}
-      <span class="flex-1 text-[13px] truncate">${(md.type || "image").toUpperCase()}${md.type === "album" ? ` (${(md.urls || []).length} รูป)` : ""}</span>
-      <button data-mdel="${j}" class="text-on-surface-variant hover:text-error"><span class="material-symbols-outlined text-[18px]">delete</span></button></div>`;
-    const listHTML = () => k.media.length ? k.media.map(item).join("") : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีสื่อ</div>`;
-    const m = modal("KOL Media", "perm_media", `
-      <label class="flex flex-col gap-1">${lbl("Caption / ข้อมูลโพสต์")}<textarea id="kcap" rows="3" class="${inpCls}" placeholder="ใส่แคปชั่น หรือ รายละเอียดเกี่ยวกับโพสต์...">${esc(k.caption || "")}</textarea></label>
-      <div class="text-[12px] text-on-surface-variant">สื่อของ KOL — ภาพนิ่ง / อัลบัม / วิดีโอ</div>
-      <div class="flex gap-sm flex-wrap">
-        <button data-img class="px-md py-2 rounded-lg border border-outline-variant text-[13px] hover:bg-surface-container-low flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">image</span>ภาพนิ่ง</button>
-        <button data-album class="px-md py-2 rounded-lg border border-outline-variant text-[13px] hover:bg-surface-container-low flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">photo_library</span>อัลบัม</button>
-        <button data-video class="px-md py-2 rounded-lg border border-outline-variant text-[13px] hover:bg-surface-container-low flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">movie</span>วิดีโอ</button>
-      </div>
-      <div id="ml" class="flex flex-col gap-sm">${listHTML()}</div>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`);
-    const refresh = () => { m.querySelector("#ml").innerHTML = listHTML(); wire(); };
-    const wire = () => m.querySelectorAll("[data-mdel]").forEach((b) => b.addEventListener("click", async () => { k.media.splice(+b.getAttribute("data-mdel"), 1); await saveKols(a, a.kols); refresh(); renderKolTable(host, a, roster); }));
-    const pick = (accept, multiple) => new Promise((res) => { const inp = document.createElement("input"); inp.type = "file"; inp.accept = accept; if (multiple) inp.multiple = true; inp.onchange = async () => { const urls = []; for (const f of [...(inp.files || [])]) { try { const { url } = await uploadFile("/uploads/campaign-media", f); urls.push(url); } catch (e) { toast(e.message, "err"); } } res(urls); }; inp.click(); });
-    m.querySelector("[data-img]").addEventListener("click", async () => { const u = await pick("image/png,image/jpeg,image/webp,image/gif", false); if (u[0]) { k.media.push({ type: "image", url: u[0] }); await saveKols(a, a.kols); refresh(); renderKolTable(host, a, roster); } });
-    m.querySelector("[data-album]").addEventListener("click", async () => { const u = await pick("image/png,image/jpeg,image/webp,image/gif", true); if (u.length) { k.media.push({ type: "album", urls: u }); await saveKols(a, a.kols); refresh(); renderKolTable(host, a, roster); } });
-    m.querySelector("[data-video]").addEventListener("click", async () => { const u = await pick("video/mp4,video/webm,video/quicktime", false); if (u[0]) { k.media.push({ type: "video", url: u[0] }); await saveKols(a, a.kols); refresh(); renderKolTable(host, a, roster); } });
-    // Caption / post info — auto-saved (debounced) as the user types.
-    let capTimer; m.querySelector("#kcap").addEventListener("input", (e) => { k.caption = e.target.value; clearTimeout(capTimer); capTimer = setTimeout(() => saveKols(a, a.kols).catch((err) => toast(err.message, "err")), 600); });
-    wire();
-  }
-
-  function openSowModal(a) {
-    const m = modal("Manage Scope of Work", "checklist", `
-      <div class="flex gap-sm"><input id="son" class="${inpCls}" placeholder="เพิ่ม SOW เช่น VDO Review"/><button data-add class="px-md py-2 rounded-lg bg-primary text-on-primary shrink-0">เพิ่ม</button></div>
-      <div id="sol" class="flex flex-col gap-1 mt-sm"></div>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`);
-    const listEl = m.querySelector("#sol");
-    const save = (opts) => api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sow_options: opts }) });
-    const refresh = () => {
-      listEl.innerHTML = (a.sow_options || []).length ? (a.sow_options || []).map((o, i) => `<div class="flex items-center gap-sm py-1 border-b border-outline-variant/50"><span class="flex-1 text-[14px]">${esc(o)}</span><button data-del="${i}" class="text-on-surface-variant hover:text-error"><span class="material-symbols-outlined text-[18px]">delete</span></button></div>`).join("") : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ</div>`;
-      listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => { a.sow_options.splice(+b.getAttribute("data-del"), 1); try { await save(a.sow_options); refresh(); } catch (e) { toast(e.message, "err"); } }));
-    };
-    m.querySelector("[data-add]").addEventListener("click", async () => { const v = m.querySelector("#son").value.trim(); if (!v) return; a.sow_options = [...(a.sow_options || []), v]; try { await save(a.sow_options); m.querySelector("#son").value = ""; refresh(); } catch (e) { toast(e.message, "err"); } });
-    m.querySelector("[data-close]").addEventListener("click", () => render());
-    refresh();
-  }
-
-  function openCreatorsModal(a, roster) {
-    const assigned = new Set(a.influencer_ids || []);
-    const body = `<div class="text-[12px] text-on-surface-variant">เลือกครีเอเตอร์ที่มอบหมายให้แคมเปญนี้ (จาก Directory)</div>
-      <div class="max-h-72 overflow-y-auto border border-outline-variant rounded-lg p-sm grid grid-cols-1 sm:grid-cols-2 gap-1">
-      ${(roster || []).map((i) => `<label class="flex items-center gap-sm px-sm py-1 rounded hover:bg-surface-container-low cursor-pointer text-[14px]"><input type="checkbox" class="cr rounded text-primary focus:ring-primary" value="${i.id}" ${assigned.has(i.id) ? "checked" : ""}/><span class="truncate">${esc(i.name)} <span class="text-on-surface-variant">· ${fmtNum(i.followers)}</span></span></label>`).join("")}</div>`;
-    const m = modal("Assign Creators", "group_add", body, `
-      <button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>
-      <button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container">Save</button>`);
-    m.querySelector("[data-save]").addEventListener("click", async () => {
-      const ids = [...m.querySelectorAll(".cr:checked")].map((c) => parseInt(c.value));
-      try { await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ influencer_ids: ids }) }); toast("บันทึกครีเอเตอร์แล้ว"); m.remove(); render(); }
-      catch (e) { toast(e.message, "err"); }
-    });
   }
 
   function openBrandsModal() {
@@ -891,12 +603,19 @@ a{color:#0058be;text-decoration:none;}a:hover{text-decoration:underline;}
       listEl.innerHTML = brands.length
         ? brands.map((b) => `<div class="flex items-center gap-sm py-2 border-b border-outline-variant/50" data-id="${b.id}">
             <div class="br-logo">${b.logo_url ? `<img src="${esc(mediaSrc(b.logo_url))}" alt=""/>` : `<span class="material-symbols-outlined text-[18px] text-on-surface-variant">storefront</span>`}</div>
-            <span class="flex-1 font-semibold">${esc(b.name)}</span>
+            <span class="w-36 shrink-0 font-semibold truncate" title="${esc(b.name)}">${esc(b.name)}</span>
+            <input data-company class="flex-1 min-w-0 bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-1 text-[13px]" value="${esc(b.company || "")}" placeholder="บริษัทเจ้าของแบรนด์ (Company)" title="บริษัทเจ้าของแบรนด์ — แคมเปญใต้แบรนด์นี้จะใช้ชื่อบริษัทนี้อัตโนมัติ"/>
             <button data-logo class="text-on-surface-variant hover:text-primary" title="${b.logo_url ? "เปลี่ยนโลโก้" : "เพิ่มโลโก้"}"><span class="material-symbols-outlined text-[18px]">${b.logo_url ? "photo_camera" : "add_photo_alternate"}</span></button>
             ${b.logo_url ? `<button data-logo-del class="text-on-surface-variant hover:text-error" title="ลบโลโก้"><span class="material-symbols-outlined text-[18px]">hide_image</span></button>` : ""}
             <button data-del class="text-on-surface-variant hover:text-error" title="ลบแบรนด์"><span class="material-symbols-outlined text-[18px]">delete</span></button>
           </div>`).join("")
         : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีแบรนด์</div>`;
+      listEl.querySelectorAll("[data-company]").forEach((inp) => inp.addEventListener("change", async () => {
+        const id = inp.closest("[data-id]").dataset.id;
+        const company = inp.value.trim();
+        try { await api("/brands/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company }) }); toast(company ? "บันทึกบริษัท — แคมเปญใต้แบรนด์นี้อัปเดตตามแล้ว" : "ล้างบริษัทแล้ว"); }
+        catch (e) { toast(e.message, "err"); }
+      }));
       listEl.querySelectorAll("[data-logo]").forEach((b) => b.addEventListener("click", () => pickBrandLogo(b.closest("[data-id]").dataset.id)));
       listEl.querySelectorAll("[data-logo-del]").forEach((b) => b.addEventListener("click", async () => {
         try { await setBrandLogo(b.closest("[data-id]").dataset.id, ""); toast("ลบโลโก้แล้ว"); refresh(); } catch (e) { toast(e.message, "err"); }
@@ -916,4 +635,31 @@ a{color:#0058be;text-decoration:none;}a:hover{text-decoration:underline;}
     m.querySelector("[data-close]").addEventListener("click", () => render());
     refresh();
   }
+
+  // ---- Version history modal (header button, admin-only) ----
+  function openVersionModal() {
+    if (!isAdmin()) return;
+    const a = activeAssetRef;
+    if (!a || !a.id) { toast("เปิดแคมเปญก่อน แล้วจึงดูประวัติเวอร์ชัน", "info"); return; }
+    const list = loadVersions(a.id).slice().reverse(); // newest first
+    const fmtTs = (ts) => { try { return new Date(ts).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) { return String(ts); } };
+    const rowHtml = (v, i) => `<div class="ver-row">
+        <div class="ver-info"><div class="ver-when">${fmtTs(v.ts)}${i === 0 ? ' <span class="ver-now">ล่าสุด</span>' : ""}</div>
+          <div class="ver-meta">${(v.data.kols || []).length} KOL · สถานะ ${esc(STATUS_LABEL[v.data.status] || v.data.status || "—")}</div></div>
+        ${i === 0 ? "" : `<button class="ver-restore" data-restore="${i}"><span class="material-symbols-outlined text-[16px]">restore</span>ย้อนกลับ</button>`}
+      </div>`;
+    const body = list.length
+      ? `<div class="text-[12px] text-on-surface-variant">เก็บอัตโนมัติสูงสุด ${VERSION_CAP} เวอร์ชันล่าสุดของแคมเปญนี้ — กด “ย้อนกลับ” เพื่อกู้คืน (ข้อมูลปัจจุบันจะถูกเขียนทับ)</div><div class="ver-list">${list.map(rowHtml).join("")}</div>`
+      : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีประวัติเวอร์ชัน — ระบบจะเริ่มเก็บเมื่อมีการแก้ไข/บันทึก</div>`;
+    const m = modal("ประวัติเวอร์ชัน (Version Log)", "history", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`, "max-w-xl");
+    m.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", async () => {
+      const v = list[+b.getAttribute("data-restore")];
+      if (!v || !confirm(`ย้อนกลับไปเวอร์ชัน ${fmtTs(v.ts)} ?\nข้อมูลปัจจุบันจะถูกเขียนทับ`)) return;
+      try {
+        await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v.data) });
+        toast("ย้อนกลับเวอร์ชันแล้ว ✓"); m.remove(); render();
+      } catch (e) { toast(e.message, "err"); }
+    }));
+  }
+  document.getElementById("ver-history")?.addEventListener("click", openVersionModal);
 })();

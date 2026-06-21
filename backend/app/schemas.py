@@ -75,14 +75,13 @@ def sanitize_past_campaigns(campaigns: list[dict[str, Any]] | None) -> list[dict
 
 
 def normalize_tier_value(value: str | None) -> str:
-    """Empty string passes through (auto-derive later); else must be a known tier."""
+    """Empty string passes through (auto-derive later). A known tier is
+    canonicalised (Nano / Micro / Mega); any other non-empty text is kept as a
+    custom, hand-entered tier label (trimmed to the column width)."""
     raw = str(value or "").strip()
     if not raw:
         return ""
-    tier = normalize_tier(raw)
-    if not tier:
-        raise ValueError("Tier must be one of Nano, Micro, Mega")
-    return tier
+    return normalize_tier(raw) or raw[:20]
 
 
 class InfluencerBase(BaseModel):
@@ -255,7 +254,9 @@ class ImportResult(BaseModel):
 
 # ---------- Auth / users ----------
 
-ROLES = {"admin", "viewer"}
+# admin = full control; manager = edit only campaigns assigned to them;
+# viewer = read-only, and only campaigns assigned to them.
+ROLES = {"admin", "manager", "viewer"}
 
 
 class LoginRequest(BaseModel):
@@ -263,12 +264,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str   # Google ID token (JWT) from Google Identity Services
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
+    email: str = ""
     full_name: str = ""
     role: str
+    organization: str = ""
+    position: str = ""
+    note: str = ""
 
 
 class LoginResponse(BaseModel):
@@ -279,14 +288,18 @@ class LoginResponse(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=80)
     password: str = Field(..., min_length=4, max_length=128)
+    email: str = ""
     full_name: str = ""
     role: str = "viewer"
+    organization: str = ""
+    position: str = ""
+    note: str = ""
 
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str) -> str:
         if value not in ROLES:
-            raise ValueError("Role must be 'admin' or 'viewer'")
+            raise ValueError("Role must be 'admin', 'manager' or 'viewer'")
         return value
 
 
@@ -297,13 +310,17 @@ class PasswordChange(BaseModel):
 
 class UserUpdate(BaseModel):
     full_name: str | None = None
+    email: str | None = None
     role: str | None = None
+    organization: str | None = None
+    position: str | None = None
+    note: str | None = None
 
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str | None) -> str | None:
         if value is not None and value not in ROLES:
-            raise ValueError("Role must be 'admin' or 'viewer'")
+            raise ValueError("Role must be 'admin', 'manager' or 'viewer'")
         return value
 
 

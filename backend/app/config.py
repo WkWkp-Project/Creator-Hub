@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     secret_key: str = DEFAULT_SECRET
     token_ttl_hours: int = 24 * 7   # login session length
 
+    # Google Sign-In — OAuth 2.0 Web client ID (from Google Cloud console).
+    # When set, the frontend shows the "Sign in with Google" button and the
+    # backend verifies ID tokens against this audience. Empty = feature off.
+    google_client_id: str = ""
+    # Email domains that are auto-granted admin on Google login (substring match).
+    admin_email_domains: str = "wkwkp"
+
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() in {"production", "prod"}
