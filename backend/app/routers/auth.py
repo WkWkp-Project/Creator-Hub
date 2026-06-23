@@ -28,7 +28,8 @@ def _is_admin_email(email: str) -> bool:
     """True if the email's domain matches an auto-admin domain (e.g. wkwkp)."""
     domain = email.rsplit("@", 1)[-1].lower()
     needles = [d.strip().lower() for d in get_settings().admin_email_domains.split(",") if d.strip()]
-    return any(n and n in domain for n in needles)
+    # Suffix match at a label boundary — exact domain or a subdomain of it.
+    return any(n and (domain == n or domain.endswith("." + n)) for n in needles)
 
 
 # --- User ⇄ Member consistency -------------------------------------------------

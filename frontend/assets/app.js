@@ -1106,6 +1106,21 @@
             <button data-browse class="bg-surface border border-outline-variant text-primary font-semibold rounded-lg py-2 px-md hover:bg-surface-container-lowest transition-colors shadow-sm">Browse Files</button>
             <input type="file" accept=".csv,.xlsx,.xls" class="hidden" data-fileinput />
           </div>
+          <div class="flex flex-wrap items-center justify-between gap-sm bg-surface-container-low/60 border border-outline-variant rounded-lg px-md py-sm">
+            <div class="text-[13px] text-on-surface-variant">📋 ไม่รู้จะกรอกคอลัมน์ไหน? โหลดเทมเพลตที่หัวตารางแมชไว้แล้ว แล้วกรอกตามได้เลย</div>
+            <button data-template class="bg-surface border border-primary text-primary text-[13px] font-semibold rounded-lg py-2 px-md hover:bg-surface-container-lowest transition-colors flex items-center gap-1 shrink-0"><span class="material-symbols-outlined text-[18px]">download</span>ดาวน์โหลดเทมเพลต Excel</button>
+          </div>
+          <details class="text-[12px] text-on-surface-variant border border-outline-variant rounded-lg px-md py-sm">
+            <summary class="cursor-pointer font-semibold text-on-surface">ดูคอลัมน์ที่รองรับ + รูปแบบค่า</summary>
+            <div class="mt-sm leading-relaxed">
+              <b>จำเป็น:</b> ชื่อ (Name)<br/>
+              <b>ตัวเลข</b> (ใส่ <code>1.2M</code> / <code>฿95,000</code> / <code>4.8%</code> ได้): Followers, Engagement Rate, ค่าตัว, ค่าเจนโค้ด, ค่าเมเนจฟี, ค่าเอเจนฟี %, Age<br/>
+              <b>ข้อความ:</b> Handle, Niche, Platform, Location, Bio, Notes, Currency<br/>
+              <b>ลิงก์ (URL เต็ม):</b> Instagram / TikTok / YouTube / Facebook / X / Website Link<br/>
+              <b>อื่นๆ:</b> Tier = Nano/Micro/Mega (เว้นว่าง = คิดจาก followers อัตโนมัติ) · Verified = yes/no<br/>
+              <span class="text-[11px]">หัวตารางสะกดใกล้เคียงก็พอ — ระบบแมชไทย/อังกฤษให้อัตโนมัติ · ชื่อ/handle ซ้ำของเดิม = อัปเดต</span>
+            </div>
+          </details>
           <div id="mapping-zone"></div>
         </div>
         <div class="px-lg py-md border-t border-outline-variant flex justify-between items-center bg-surface-container-lowest">
@@ -1133,6 +1148,7 @@
     dz.addEventListener("drop", (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0], modal));
 
     modal.querySelector("[data-process]").addEventListener("click", () => processImport(modal, close));
+    modal.querySelector("[data-template]").addEventListener("click", () => window.open(API + "/imports/template", "_blank"));
   }
 
   async function handleFile(file, modal) {
@@ -1602,8 +1618,7 @@
         else localStorage.removeItem("ch_remember_id");
         setAuth(await res.json());
         overlay.remove();
-        location.hash = "#/assets";   // always land on the Campaigns suite right after logging in
-        startApp();
+        startApp("#/assets");   // always land on the Campaigns suite right after logging in
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     };
     btn.addEventListener("click", submit);
@@ -1625,7 +1640,7 @@
             body: JSON.stringify({ credential: resp.credential }),
           });
           if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "เข้าสู่ระบบด้วย Google ไม่สำเร็จ"); }
-          setAuth(await r.json()); overlay.remove(); location.hash = "#/assets"; startApp();
+          setAuth(await r.json()); overlay.remove(); startApp("#/assets");
         } catch (e) { err.textContent = e.message; }
       };
       if (cfg.google_client_id) {
@@ -1685,11 +1700,15 @@
     });
   }
 
-  async function startApp() {
+  async function startApp(forceHash) {
     setAuth(auth);                          // refresh body.is-viewer class
     renderProfileChip();
-    if (!location.hash) location.hash = "#/assets";   // land on the Campaigns suite after login
-    render();
+    // Render exactly once. Either we're already on the target hash (render now),
+    // or we navigate to it and let the single hashchange handler render — never
+    // both (that double-rendered the page, stacking two copies).
+    const target = forceHash || location.hash || "#/assets";
+    if (location.hash === target) render();
+    else location.hash = target;
   }
 
   async function boot() {

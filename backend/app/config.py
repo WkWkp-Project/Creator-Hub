@@ -39,8 +39,10 @@ class Settings(BaseSettings):
     # When set, the frontend shows the "Sign in with Google" button and the
     # backend verifies ID tokens against this audience. Empty = feature off.
     google_client_id: str = ""
-    # Email domains that are auto-granted admin on Google login (substring match).
-    admin_email_domains: str = "wkwkp"
+    # Email domains auto-granted admin on Google login. Matched as a domain
+    # SUFFIX at a label boundary (exact domain or *.domain) — never a substring,
+    # so lookalikes like "wkwkp.attacker.com" are NOT granted admin.
+    admin_email_domains: str = "wkwkp.com"
 
     @property
     def is_production(self) -> bool:

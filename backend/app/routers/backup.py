@@ -19,6 +19,8 @@ from sqlalchemy import DateTime
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..content_asset_models import ContentAsset
+from ..directory_models import Brand, Member
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 
@@ -28,8 +30,15 @@ router = APIRouter(prefix="/api/backup", tags=["backup"])
 BACKUP_DIR = Path(os.environ.get("BACKUPS_DIR") or (Path(__file__).resolve().parents[2] / "backups"))
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-# Tables included in a snapshot (business data that admins edit).
-_TABLES = {"influencers": models.Influencer, "campaigns": models.Campaign}
+# Tables included in a snapshot (all business data, incl. the real campaign
+# workspace + people/brand directory — not just the legacy influencers/campaigns).
+_TABLES = {
+    "influencers": models.Influencer,
+    "campaigns": models.Campaign,
+    "content_assets": ContentAsset,
+    "members": Member,
+    "brands": Brand,
+}
 SNAPSHOT_VERSION = 1
 
 

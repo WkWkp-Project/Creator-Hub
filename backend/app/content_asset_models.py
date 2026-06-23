@@ -27,7 +27,6 @@ DEFAULT_INPUT_FILES: list[dict] = [
     {"n": "01", "key": "product_info", "title": "Product Information", "synced": "Product_Info", "source": "google_drive", "drive_url": "", "thumb": "", "linked": False},
     {"n": "02", "key": "content_direction", "title": "Content Direction", "synced": "Content_Dir", "source": "google_drive", "drive_url": "", "thumb": "", "linked": False},
     {"n": "03", "key": "ci_design", "title": "CI Design Guidelines", "synced": "CI_Design", "source": "uploaded", "drive_url": "", "thumb": "", "linked": False},
-    {"n": "04", "key": "content_category", "title": "Content Category Map", "synced": "Cat_Map", "source": "notion", "drive_url": "", "thumb": "", "linked": False},
 ]
 
 

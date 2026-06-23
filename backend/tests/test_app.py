@@ -338,7 +338,7 @@ def test_content_asset_crud_and_drive_links():
     assert created.status_code == 201
     a = created.json()
     aid = a["id"]
-    assert len(a["input_files"]) == 4 and a["status"] == "draft"
+    assert len(a["input_files"]) == 3 and a["status"] == "draft"
     # invalid status rejected
     assert client.put(f"/api/assets/{aid}", json={"status": "bogus"}).status_code == 422
     # drive-links endpoint marks linked
@@ -484,6 +484,14 @@ def test_campaign_budget_show_visibility():
         "budget_show": {"total": False, "boosting_cost": False}}).json()
     assert upd["budget_show"] == {"total": False, "boosting_cost": False}
     client.delete(f"/api/assets/{asset['id']}")
+
+
+def test_import_template_download():
+    r = client.get("/api/imports/template")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert r.headers["content-disposition"].endswith('.xlsx"')
+    assert r.content[:2] == b"PK"   # xlsx is a zip container
 
 
 def test_production_config_flags():

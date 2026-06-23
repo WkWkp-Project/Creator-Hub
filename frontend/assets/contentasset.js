@@ -21,7 +21,7 @@
 
   // Section A is a fixed 3-slot template; stored input_files fill each slot in order.
   // Kept in core because the campaign LIST cards summarise the linked-file count.
-  const SECTION_A_TITLES = ["Product Information", "KOL Plan", "KOL Brief"];
+  const SECTION_A_TITLES = ["Product Information", "Content Direction", "CI Design Guidelines"];
   const sectionAFiles = (a) => SECTION_A_TITLES.map((title, i) => ({
     ...((a.input_files || [])[i] || {}), title, n: String(i + 1).padStart(2, "0"),
   }));

@@ -48,6 +48,21 @@ def _can_edit(user: models.User, asset: ContentAsset) -> bool:
     return user.role == "admin" or (user.role == "manager" and user.id in (asset.assigned_user_ids or []))
 
 
+_BUDGET_KEYS = ("rate", "gen_code_price", "boosting_cost")
+
+
+def _redact_budget(asset: ContentAsset, user: models.User) -> None:
+    """Enforce budget_show server-side: blank the budget figures a campaign hid
+    from the customer (viewer). Mutates the in-memory object only — this runs in
+    read paths that never commit, so it does not persist."""
+    if user.role != "viewer":
+        return
+    bshow = asset.budget_show or {}
+    hidden = [k for k in _BUDGET_KEYS if bshow.get(k) is False]
+    if hidden:
+        asset.kols = [{**k, **{f: "" for f in hidden}} for k in (asset.kols or [])]
+
+
 @router.get("", response_model=ContentAssetList)
 def list_assets(
     search: str | None = None,
@@ -72,7 +87,10 @@ def list_assets(
     if user.role != "admin":
         rows = [a for a in rows if user.id in (a.assigned_user_ids or [])]
     total = len(rows)
-    return {"total": total, "items": rows[skip: skip + limit]}
+    items = rows[skip: skip + limit]
+    for it in items:
+        _redact_budget(it, user)
+    return {"total": total, "items": items}
 
 
 @router.get("/{asset_id}", response_model=ContentAssetOut)
@@ -80,6 +98,7 @@ def get_asset(asset_id: int, user: models.User = Depends(get_current_user), db: 
     obj = db.get(ContentAsset, asset_id)
     if not obj or not _can_read(user, obj):
         raise HTTPException(404, "Content asset not found")   # hide existence from unauthorised users
+    _redact_budget(obj, user)
     return obj
 
 

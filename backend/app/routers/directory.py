@@ -29,6 +29,10 @@ def _sync_user_for_member(db: Session, member: Member) -> None:
         (func.lower(models.User.email) == e) | (func.lower(models.User.username) == e)
     ).first()
     if u:
+        # Don't let a Member edit demote the last remaining admin login (lockout).
+        if u.role == "admin" and role != "admin" and \
+                db.query(models.User).filter(models.User.role == "admin").count() <= 1:
+            raise HTTPException(400, "Cannot demote the last admin")
         u.role = role
         if not u.email:
             u.email = e
