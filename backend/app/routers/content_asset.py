@@ -6,7 +6,12 @@ Access model:
   - manager : sees & edits only campaigns assigned to them (assigned_user_ids).
   - viewer  : sees (read-only) only campaigns assigned to them.
 """
+import io
+from datetime import datetime
+
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -49,6 +54,13 @@ def _can_edit(user: models.User, asset: ContentAsset) -> bool:
 
 
 _BUDGET_KEYS = ("rate", "gen_code_price", "boosting_cost")
+
+
+def _num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _redact_budget(asset: ContentAsset, user: models.User) -> None:
@@ -183,3 +195,57 @@ def delete_asset(asset_id: int, _: models.User = Depends(require_admin), db: Ses
         raise HTTPException(404, "Content asset not found")
     db.delete(obj)
     db.commit()
+
+
+@router.get("/{asset_id}/export")
+def export_asset(
+    asset_id: int,
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Download one campaign's KOL plan + budget as Excel/CSV (admin or assigned manager)."""
+    from .. import models as _m
+    obj = db.get(ContentAsset, asset_id)
+    if not obj or not _can_read(user, obj):
+        raise HTTPException(404, "Content asset not found")
+    if not _can_edit(user, obj):
+        raise HTTPException(403, "คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (export ไม่ได้)")
+
+    names = {i.id: i.name for i in db.execute(select(_m.Influencer)).scalars().all()}
+    rows = []
+    for k in (obj.kols or []):
+        rate, gen, boost = _num(k.get("rate")), _num(k.get("gen_code_price")), _num(k.get("boosting_cost"))
+        rows.append({
+            "Month": k.get("month", ""),
+            "Tier": k.get("tier", ""),
+            "Type": k.get("kol_type", ""),
+            "KOL": names.get(k.get("influencer_id"), k.get("name", "")),
+            "SOW": ", ".join(k.get("sow", []) if isinstance(k.get("sow"), list) else []),
+            "Product Focus": k.get("product_focus", ""),
+            "Approved": k.get("client_approved", ""),
+            "Post Date": k.get("post_date", ""),
+            "Link": k.get("link", ""),
+            "ค่าตัว": rate,
+            "Gen Code": gen,
+            "Boosting": boost,
+            "Total": round(rate + gen + boost, 2),
+            "Objective": k.get("objective", ""),
+        })
+    df = pd.DataFrame(rows)
+    stamp = datetime.now().strftime("%Y%m%d")
+    safe = "".join(c for c in (obj.campaign_name or "campaign") if c.isalnum() or c in " -_")[:40].strip() or "campaign"
+    fname = f"{safe}_{stamp}"
+
+    if format == "csv":
+        data = df.to_csv(index=False).encode("utf-8-sig")
+        return StreamingResponse(io.BytesIO(data), media_type="text/csv",
+                                 headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'})
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="KOL Plan")
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+    )

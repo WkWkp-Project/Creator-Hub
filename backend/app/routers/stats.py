@@ -4,10 +4,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..content_asset_models import ContentAsset
+from ..directory_models import Brand, Member
 from ..database import get_db
 from ..deps import get_current_user
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+
+def _num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @router.get("")
@@ -134,4 +143,51 @@ def financials(_: models.User = Depends(get_current_user), db: Session = Depends
         "campaign_count": len(campaigns),
         "campaign_budget_total": round(campaign_budget, 2),
         "campaign_budget_active": round(active_budget, 2),
+    }
+
+
+@router.get("/campaign-budgets")
+def campaign_budgets(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Real money flowing through the live campaign workspace (ContentAsset.kols),
+    rolled up by brand, lead, and status — the figures finance actually wants."""
+    assets = db.execute(select(ContentAsset)).scalars().all()
+    brand_names = {b.id: b.name for b in db.execute(select(Brand)).scalars().all()}
+    member_names = {m.id: m.name for m in db.execute(select(Member)).scalars().all()}
+
+    def kol_budget(a) -> float:
+        return sum(_num(k.get("rate")) + _num(k.get("gen_code_price")) + _num(k.get("boosting_cost"))
+                   for k in (a.kols or []))
+
+    total = 0.0
+    by_brand: dict[str, float] = {}
+    by_lead: dict[str, float] = {}
+    by_status: dict[str, float] = {}
+    rows = []
+    for a in assets:
+        b = kol_budget(a)
+        total += b
+        bn = brand_names.get(a.brand_id) or "No brand"
+        by_brand[bn] = by_brand.get(bn, 0.0) + b
+        by_status[a.status] = by_status.get(a.status, 0.0) + b
+        leads = a.responsible_member_ids or ([a.responsible_member_id] if a.responsible_member_id else [])
+        for mid in leads:
+            ln = member_names.get(mid)
+            if ln:
+                by_lead[ln] = by_lead.get(ln, 0.0) + b
+        rows.append({
+            "id": a.id, "campaign": a.campaign_name, "brand": bn,
+            "client": a.client_name, "status": a.status,
+            "budget": round(b, 2), "kols": len(a.kols or []),
+        })
+
+    def _rank(d, key):
+        return sorted(([{key: k, "total": round(v, 2)} for k, v in d.items()]), key=lambda r: -r["total"])
+
+    return {
+        "total": round(total, 2),
+        "campaign_count": len(assets),
+        "by_brand": _rank(by_brand, "brand"),
+        "by_lead": _rank(by_lead, "lead"),
+        "by_status": _rank(by_status, "status"),
+        "campaigns": sorted(rows, key=lambda r: -r["budget"]),
     }

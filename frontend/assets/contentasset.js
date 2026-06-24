@@ -150,6 +150,19 @@
     </div>`);
     view.appendChild(wrap);
 
+    const kolProgress = (a) => {
+      const k = a.kols || [];
+      if (!k.length) return "";
+      const ap = k.filter((x) => x.client_approved === "Approve").length;
+      const po = k.filter((x) => x.client_approved === "Posted").length;
+      const pct = (n) => Math.round((n / k.length) * 100);
+      return `<div style="margin-top:10px">
+        <div style="display:flex;height:6px;border-radius:9999px;overflow:hidden;background:#ececf0">
+          <span style="width:${pct(ap)}%;background:#16a34a"></span><span style="width:${pct(po)}%;background:#f59e0b"></span>
+        </div>
+        <div style="font-size:11px;color:#8a8a8f;margin-top:5px">📋 ${ap} อนุมัติ · ${po} โพสต์ · ${k.length} KOL</div>
+      </div>`;
+    };
     const card = (a) => {
       const slots = sectionAFiles(a);
       const linked = slots.filter((f) => f.linked).length;
@@ -159,6 +172,7 @@
           <div class="ca-label">${esc(a.client_name || "—")}</div>
           <div class="ca-card-title" style="font-family:'Poppins','Prompt',sans-serif;font-size:19px;margin-top:6px">${fancyTitle(a.campaign_name)}</div>
           <div class="ca-synced" style="color:#8a8a8f;margin-top:8px">${esc(a.period_start)} → ${esc(a.period_end)}${lead ? " · 👤 " + esc(lead) : ""}</div>
+          ${kolProgress(a)}
         </div>
         <div class="ca-card-foot">
           <span class="ca-unlinked" style="font-family:'Prompt','Poppins',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
@@ -248,6 +262,7 @@
           </div>
           ${canEdit ? `<div class="ca-hero-actions">
             <button class="ca-btn" data-edit><span class="material-symbols-outlined text-[18px]">edit</span>Edit Info</button>
+            <button class="ca-btn" data-export><span class="material-symbols-outlined text-[18px]">download</span>Export</button>
             <button class="ca-btn ca-btn-gold" data-handoff><span class="material-symbols-outlined text-[18px]">hexagon</span>Prepare Handoff</button>
           </div>` : ""}
         </div>
@@ -259,6 +274,11 @@
     wrap.querySelector("[data-back]")?.addEventListener("click", () => CH.goBack("#/assets"));
     wrap.querySelector("[data-edit]")?.addEventListener("click", () => openEditModal(a));
     wrap.querySelector("[data-handoff]")?.addEventListener("click", () => openHandoffModal(a));
+    wrap.querySelector("[data-export]")?.addEventListener("click", () => {
+      const t = CH.token ? "&token=" + encodeURIComponent(CH.token) : "";
+      window.open((window.API_BASE || "") + "/api/assets/" + a.id + "/export?format=xlsx" + t, "_blank");
+      toast("กำลัง export แผน KOL/งบ…");
+    });
 
     // Render each registered section: a consistent header (letter + title + count
     // + declared action buttons) followed by the section's own body.

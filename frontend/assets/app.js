@@ -522,6 +522,27 @@
     view.appendChild(el(`<section class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
       ${breakdown("By Tier", s.tiers || [])}${breakdown("By Niche", s.niches)}${breakdown("By Platform", s.platforms)}</section>`));
 
+    // ----- Campaign budgets — real money through the campaign suite (ContentAsset) -----
+    try {
+      const cb = await api("/stats/campaign-budgets");
+      const money = (n) => "฿" + Math.round(n || 0).toLocaleString("en-US");
+      const line = (label, val) => `<div class="flex justify-between items-center gap-md"><span class="truncate">${esc(label)}</span><span class="font-semibold whitespace-nowrap">${money(val)}</span></div>`;
+      const brandRows = (cb.by_brand || []).map((r) => line(r.brand, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีงบในแคมเปญ</div>`;
+      const statusRows = (cb.by_status || []).map((r) => line(r.status, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
+      const leadRows = (cb.by_lead || []).slice(0, 6).map((r) => line(r.lead, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
+      view.appendChild(el(`<section class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg">
+        <div class="flex items-center justify-between flex-wrap gap-sm mb-md">
+          <h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">payments</span>งบแคมเปญจริง · Campaign Budgets</h3>
+          <div class="text-right"><div class="text-[28px] font-extrabold font-poppins text-primary leading-none">${money(cb.total)}</div><div class="text-[12px] text-on-surface-variant mt-1">รวม ${cb.campaign_count} แคมเปญ</div></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-lg">
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามแบรนด์</div><div class="flex flex-col gap-sm">${brandRows}</div></div>
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามสถานะ</div><div class="flex flex-col gap-sm">${statusRows}</div></div>
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามผู้รับผิดชอบ</div><div class="flex flex-col gap-sm">${leadRows}</div></div>
+        </div>
+      </section>`));
+    } catch (_) { /* stats optional */ }
+
     // ----- Niche performance comparison (multi-dimensional) -----
     const np = await api("/stats/niche-performance");
     const rows = np.niches || [];
@@ -1552,15 +1573,55 @@
     }
   });
 
+  // Global search — quick results across BOTH campaigns and influencers (dropdown),
+  // with Enter / "view all" falling back to the full Directory filter.
   let searchTimer;
-  $("#global-search").addEventListener("input", (e) => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      filterState.search = e.target.value.trim();
-      if (!location.hash.startsWith("#/directory")) location.hash = "#/directory";
-      else render();
-    }, 300);
-  });
+  (function wireGlobalSearch() {
+    const input = $("#global-search");
+    if (!input) return;
+    let dd = null;
+    const closeDD = () => { if (dd) { dd.remove(); dd = null; } };
+    const goDirectory = () => {
+      filterState.search = input.value.trim();
+      if (location.hash.startsWith("#/directory")) render(); else location.hash = "#/directory";
+      closeDD();
+    };
+    const openDD = (html) => {
+      closeDD();
+      const r = input.getBoundingClientRect();
+      dd = el(`<div style="position:fixed;top:${r.bottom + 6}px;left:${r.left}px;width:${Math.max(r.width, 320)}px;z-index:60;background:#fff;border:1px solid #e5e5e8;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.15);max-height:60vh;overflow:auto"></div>`);
+      dd.innerHTML = html;
+      document.body.appendChild(dd);
+      dd.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
+        const go = b.dataset.go;
+        if (go === "#/directory") goDirectory();
+        else { location.hash = go; closeDD(); }
+        input.blur();
+      }));
+    };
+    document.addEventListener("click", (e) => { if (dd && !dd.contains(e.target) && e.target !== input) closeDD(); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") goDirectory(); });
+    input.addEventListener("input", (e) => {
+      clearTimeout(searchTimer);
+      const q = e.target.value.trim();
+      searchTimer = setTimeout(async () => {
+        if (q.length < 2) { closeDD(); return; }
+        const eq = encodeURIComponent(q);
+        const [camps, infs] = await Promise.all([
+          api("/assets?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
+          api("/influencers?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
+        ]);
+        const row = (icon, title, sub, go) => `<button data-go="${go}" class="w-full text-left px-md py-2 hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px] text-on-surface-variant">${icon}</span><span class="min-w-0"><span class="block font-semibold truncate">${esc(title)}</span><span class="block text-[12px] text-on-surface-variant truncate">${esc(sub)}</span></span></button>`;
+        const head = (t) => `<div class="px-md pt-2 pb-1 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wide">${t}</div>`;
+        let html = "";
+        if ((camps.items || []).length) html += head("Campaigns") + camps.items.map((c) => row("hexagon", c.campaign_name, c.client_name || "", "#/asset/" + c.id)).join("");
+        if ((infs.items || []).length) html += head("Influencers") + infs.items.map((i) => row("person", i.name, (i.handle || "") + " · " + fmtNum(i.followers || 0), "#/influencer/" + i.id)).join("");
+        if (!html) html = `<div class="px-md py-3 text-[13px] text-on-surface-variant">ไม่พบผลลัพธ์สำหรับ "${esc(q)}"</div>`;
+        html += `<button data-go="#/directory" class="w-full text-left px-md py-2 border-t border-outline-variant text-[13px] text-primary font-semibold hover:bg-surface-container-low">ดูทั้งหมดใน Directory →</button>`;
+        openDD(html);
+      }, 250);
+    });
+  })();
 
   // ---------- login + session boot ----------
   function showLogin(message = "") {

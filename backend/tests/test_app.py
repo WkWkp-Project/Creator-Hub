@@ -494,6 +494,21 @@ def test_import_template_download():
     assert r.content[:2] == b"PK"   # xlsx is a zip container
 
 
+def test_campaign_budgets_rollup_and_export():
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Budget Rollup Camp", "drive_folder_url": "https://drive.google.com/drive/folders/b",
+        "client_name": "RollupCo",
+        "kols": [{"influencer_id": 0, "rate": 1000, "gen_code_price": 200, "boosting_cost": 300, "client_approved": "Approve"},
+                 {"influencer_id": 0, "rate": "500", "boosting_cost": "", "client_approved": "Posted"}]}).json()
+    cb = client.get("/api/stats/campaign-budgets").json()
+    assert cb["total"] >= 2000  # 1500 + 500 from this campaign at least
+    assert any(r["campaign"] == "Budget Rollup Camp" and r["budget"] == 2000 for r in cb["campaigns"])
+    # per-campaign export returns a real xlsx
+    r = client.get(f"/api/assets/{asset['id']}/export?format=xlsx")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    client.delete(f"/api/assets/{asset['id']}")
+
+
 def test_production_config_flags():
     from app.config import Settings, DEFAULT_SECRET
     insecure = Settings(environment="production", secret_key=DEFAULT_SECRET, _env_file=None)
