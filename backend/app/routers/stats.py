@@ -7,7 +7,7 @@ from .. import models
 from ..content_asset_models import ContentAsset
 from ..directory_models import Brand, Member
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -191,3 +191,11 @@ def campaign_budgets(_: models.User = Depends(get_current_user), db: Session = D
         "by_status": _rank(by_status, "status"),
         "campaigns": sorted(rows, key=lambda r: -r["budget"]),
     }
+
+
+@router.get("/activity")
+def activity(limit: int = 20, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Recent campaign-change activity across the workspace (for the dashboard)."""
+    rows = db.query(models.ChangeLog).order_by(models.ChangeLog.created_at.desc()).limit(limit).all()
+    return [{"asset_id": r.asset_id, "actor": r.actor, "action": r.action,
+             "summary": r.summary, "at": r.created_at.isoformat()} for r in rows]

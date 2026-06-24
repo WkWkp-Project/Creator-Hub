@@ -163,6 +163,23 @@
         <div style="font-size:11px;color:#8a8a8f;margin-top:5px">📋 ${ap} อนุมัติ · ${po} โพสต์ · ${k.length} KOL</div>
       </div>`;
     };
+    const deadlineBadge = (a) => {
+      const kols = a.kols || [];
+      if (!kols.length) return "";
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const parse = (s) => { if (!s || !/^\d{4}-\d{2}-\d{2}/.test(s)) return null; const d = new Date(s); return isNaN(d) ? null : d; };
+      let overdue = 0, soon = 0;
+      kols.forEach((k) => {
+        if (k.client_approved === "Approve") return;   // already done
+        const d = parse(k.post_date) || parse(k.period_to);
+        if (!d) return;
+        const days = Math.round((d - today) / 86400000);
+        if (days < 0) overdue++; else if (days <= 7) soon++;
+      });
+      if (overdue) return `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#b80f18">⚠ ${overdue} งานเลยกำหนด</div>`;
+      if (soon) return `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#9a6700">🕒 ${soon} งานใกล้ถึงกำหนด (7 วัน)</div>`;
+      return "";
+    };
     const card = (a) => {
       const slots = sectionAFiles(a);
       const linked = slots.filter((f) => f.linked).length;
@@ -172,7 +189,7 @@
           <div class="ca-label">${esc(a.client_name || "—")}</div>
           <div class="ca-card-title" style="font-family:'Poppins','Prompt',sans-serif;font-size:19px;margin-top:6px">${fancyTitle(a.campaign_name)}</div>
           <div class="ca-synced" style="color:#8a8a8f;margin-top:8px">${esc(a.period_start)} → ${esc(a.period_end)}${lead ? " · 👤 " + esc(lead) : ""}</div>
-          ${kolProgress(a)}
+          ${kolProgress(a)}${deadlineBadge(a)}
         </div>
         <div class="ca-card-foot">
           <span class="ca-unlinked" style="font-family:'Prompt','Poppins',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
@@ -204,9 +221,11 @@
       ids.forEach((bid) => {
         const heading = (bid && brandName(bid)) ? esc(brandName(bid)) : "No brand";
         const logo = bid && brandLogo(bid);
+        const isBrand = !!(bid && brandName(bid));
         const grp = el(`<div style="margin-bottom:28px">
-          <div class="ca-sechead" style="margin:0 0 14px">${logo ? `<img class="ca-brand-logo" src="${esc(mediaSrc(logo))}" alt=""/>` : ""}<span class="ca-sectitle" style="font-size:20px">${heading}</span><span class="ca-linkcount">${byBrand.get(bid).length} CAMPAIGN${byBrand.get(bid).length > 1 ? "S" : ""}</span></div>
+          <div class="ca-sechead" style="margin:0 0 14px">${logo ? `<img class="ca-brand-logo" src="${esc(mediaSrc(logo))}" alt=""/>` : ""}<span class="ca-sectitle" style="font-size:20px">${heading}</span><span class="ca-linkcount">${byBrand.get(bid).length} CAMPAIGN${byBrand.get(bid).length > 1 ? "S" : ""}</span>${isBrand ? `<a data-brand style="margin-left:14px;font-size:12px;color:#e1121c;font-weight:600;cursor:pointer">ดูแบรนด์ →</a>` : ""}</div>
           <div class="ca-cards"></div></div>`);
+        grp.querySelector("[data-brand]")?.addEventListener("click", () => (location.hash = "#/brand/" + bid));
         const cards = grp.querySelector(".ca-cards");
         byBrand.get(bid).forEach((a) => cards.appendChild(card(a)));
         groupsHost.appendChild(grp);
@@ -229,6 +248,39 @@
     renderGroups(activeTab);
     wrap.querySelector("[data-new]")?.addEventListener("click", () => openAddModal());
     wrap.querySelector("[data-brands]")?.addEventListener("click", () => openBrandsModal());
+  });
+
+  // ========================================================== BRAND ROUTE ===
+  route("brand", async (view, id) => {
+    await loadDirectory();
+    const bid = Number(id);
+    const b = brands.find((x) => x.id === bid);
+    const data = await api("/assets");
+    const camps = data.items.filter((a) => a.brand_id === bid);
+    const num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
+    const budget = (a) => (a.kols || []).reduce((s, k) => s + num(k.rate) + num(k.gen_code_price) + num(k.boosting_cost), 0);
+    const money = (n) => "฿" + Math.round(n).toLocaleString("en-US");
+    const total = camps.reduce((s, a) => s + budget(a), 0);
+    const logo = b && brandLogo(b.id);
+    const rows = camps.length ? camps.map((a) => `<div class="brand-camp-row" data-go="#/asset/${a.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #ececf0;cursor:pointer">
+        <div style="min-width:0"><div style="font-weight:700" class="truncate">${esc(a.campaign_name)}</div>
+          <div style="font-size:12px;color:#8a8a8f">${esc(STATUS_LABEL[a.status] || a.status)} · ${(a.kols || []).length} KOL · ${esc(a.period_start || "—")} → ${esc(a.period_end || "—")}</div></div>
+        <div style="font-weight:800;white-space:nowrap;font-family:'Poppins'">${money(budget(a))}</div>
+      </div>`).join("") : `<div style="color:#8a8a8f;padding:14px 0">ยังไม่มีแคมเปญใต้แบรนด์นี้</div>`;
+    const wrap = el(`<div class="ca-root">
+      <div class="ca-hero">
+        <button class="ca-back" data-back><span class="material-symbols-outlined text-[18px]">arrow_back</span>ย้อนกลับ</button>
+        <div class="ca-hero-row"><div class="ca-hero-main">
+          <div class="ca-hero-brandline">${logo ? `<img class="ca-brand-logo" src="${esc(mediaSrc(logo))}" alt=""/>` : ""}<span class="ca-hero-client">${esc(b ? b.name : "No brand")}</span>${b && b.company ? `<span class="ca-dot"></span><span class="ca-hero-brand">${esc(b.company)}</span>` : ""}</div>
+          <h1 class="ca-title ca-hero-title">${camps.length} campaign${camps.length === 1 ? "" : "s"}</h1>
+          <div class="ca-hero-meta"><span class="mi"><span class="material-symbols-outlined">payments</span>งบรวม ${money(total)}</span></div>
+        </div></div>
+      </div>
+      <div style="background:#fff;border:1px solid #ececec;border-radius:14px;padding:8px 20px;margin-top:18px">${rows}</div>
+    </div>`);
+    view.appendChild(wrap);
+    wrap.querySelector("[data-back]")?.addEventListener("click", () => CH.goBack("#/assets"));
+    wrap.querySelectorAll("[data-go]").forEach((r) => r.addEventListener("click", () => (location.hash = r.dataset.go)));
   });
 
   // ========================================================== DETAIL ROUTE ===
@@ -656,30 +708,22 @@ ${sectionsHtml}
     refresh();
   }
 
-  // ---- Version history modal (header button, admin-only) ----
-  function openVersionModal() {
-    if (!isAdmin()) return;
+  // ---- Activity log modal (header button) — server-side audit trail ----
+  async function openVersionModal() {
     const a = activeAssetRef;
-    if (!a || !a.id) { toast("เปิดแคมเปญก่อน แล้วจึงดูประวัติเวอร์ชัน", "info"); return; }
-    const list = loadVersions(a.id).slice().reverse(); // newest first
-    const fmtTs = (ts) => { try { return new Date(ts).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) { return String(ts); } };
-    const rowHtml = (v, i) => `<div class="ver-row">
-        <div class="ver-info"><div class="ver-when">${fmtTs(v.ts)}${i === 0 ? ' <span class="ver-now">ล่าสุด</span>' : ""}</div>
-          <div class="ver-meta">${(v.data.kols || []).length} KOL · สถานะ ${esc(STATUS_LABEL[v.data.status] || v.data.status || "—")}</div></div>
-        ${i === 0 ? "" : `<button class="ver-restore" data-restore="${i}"><span class="material-symbols-outlined text-[16px]">restore</span>ย้อนกลับ</button>`}
+    if (!a || !a.id) { toast("เปิดแคมเปญก่อน แล้วจึงดูประวัติการแก้ไข", "info"); return; }
+    let list = [];
+    try { list = await api("/assets/" + a.id + "/history"); } catch (e) { toast(e.message, "err"); return; }
+    const fmtTs = (ts) => { try { return new Date(ts).toLocaleString("th-TH", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }); } catch (_) { return String(ts); } };
+    const ico = (act) => act === "created" ? "add_circle" : act === "deleted" ? "delete" : "edit";
+    const rowHtml = (v) => `<div class="ver-row">
+        <div class="ver-info"><div class="ver-when"><span class="material-symbols-outlined text-[15px]" style="vertical-align:-3px">${ico(v.action)}</span> ${esc(v.actor || "—")} · ${fmtTs(v.at)}</div>
+          <div class="ver-meta">${esc(v.summary || v.action)}</div></div>
       </div>`;
     const body = list.length
-      ? `<div class="text-[12px] text-on-surface-variant">เก็บอัตโนมัติสูงสุด ${VERSION_CAP} เวอร์ชันล่าสุดของแคมเปญนี้ — กด “ย้อนกลับ” เพื่อกู้คืน (ข้อมูลปัจจุบันจะถูกเขียนทับ)</div><div class="ver-list">${list.map(rowHtml).join("")}</div>`
-      : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีประวัติเวอร์ชัน — ระบบจะเริ่มเก็บเมื่อมีการแก้ไข/บันทึก</div>`;
-    const m = modal("ประวัติเวอร์ชัน (Version Log)", "history", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`, "max-w-xl");
-    m.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", async () => {
-      const v = list[+b.getAttribute("data-restore")];
-      if (!v || !confirm(`ย้อนกลับไปเวอร์ชัน ${fmtTs(v.ts)} ?\nข้อมูลปัจจุบันจะถูกเขียนทับ`)) return;
-      try {
-        await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v.data) });
-        toast("ย้อนกลับเวอร์ชันแล้ว ✓"); m.remove(); render();
-      } catch (e) { toast(e.message, "err"); }
-    }));
+      ? `<div class="text-[12px] text-on-surface-variant">บันทึกการแก้ไขแคมเปญนี้ (ใครแก้อะไรเมื่อไหร่) — เก็บฝั่งเซิร์ฟเวอร์ ล่าสุด 50 รายการ</div><div class="ver-list">${list.map(rowHtml).join("")}</div>`
+      : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีประวัติการแก้ไข</div>`;
+    modal("ประวัติการแก้ไข (Activity Log)", "history", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`, "max-w-xl");
   }
   document.getElementById("ver-history")?.addEventListener("click", openVersionModal);
 })();

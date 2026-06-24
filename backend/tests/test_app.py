@@ -509,6 +509,16 @@ def test_campaign_budgets_rollup_and_export():
     client.delete(f"/api/assets/{asset['id']}")
 
 
+def test_campaign_audit_log():
+    a = client.post("/api/assets", json={"campaign_name": "Audited Camp", "drive_folder_url": "x"}).json()
+    client.put(f"/api/assets/{a['id']}", json={"status": "active"})
+    hist = client.get(f"/api/assets/{a['id']}/history").json()
+    assert len(hist) >= 2 and hist[0]["action"] == "updated" and hist[-1]["action"] == "created"
+    acts = client.get("/api/stats/activity?limit=5").json()
+    assert any(x["asset_id"] == a["id"] for x in acts)
+    client.delete(f"/api/assets/{a['id']}")
+
+
 def test_production_config_flags():
     from app.config import Settings, DEFAULT_SECRET
     insecure = Settings(environment="production", secret_key=DEFAULT_SECRET, _env_file=None)

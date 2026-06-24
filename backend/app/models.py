@@ -136,3 +136,16 @@ class Campaign(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class ChangeLog(Base):
+    """Server-side audit trail of campaign (ContentAsset) changes — who did what,
+    when. Read-only history (auto-created table; no migration needed)."""
+    __tablename__ = "change_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    actor: Mapped[str] = mapped_column(String(160), default="")
+    action: Mapped[str] = mapped_column(String(20), default="updated")  # created/updated/deleted
+    summary: Mapped[str] = mapped_column(String(400), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

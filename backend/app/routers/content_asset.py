@@ -63,6 +63,12 @@ def _num(v) -> float:
         return 0.0
 
 
+def _log(db: Session, asset_id: int, user: models.User, action: str, summary: str = "") -> None:
+    """Append an audit-trail entry for a campaign change."""
+    actor = user.full_name or user.email or user.username
+    db.add(models.ChangeLog(asset_id=asset_id, actor=actor, action=action, summary=summary[:400]))
+
+
 def _redact_budget(asset: ContentAsset, user: models.User) -> None:
     """Enforce budget_show server-side: blank the budget figures a campaign hid
     from the customer (viewer). Mutates the in-memory object only — this runs in
@@ -115,7 +121,7 @@ def get_asset(asset_id: int, user: models.User = Depends(get_current_user), db: 
 
 
 @router.post("", response_model=ContentAssetOut, status_code=201)
-def create_asset(data: ContentAssetCreate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def create_asset(data: ContentAssetCreate, user: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     values = data.model_dump()
     if not values.get("input_files"):
         values["input_files"] = [dict(f) for f in DEFAULT_INPUT_FILES]
@@ -130,7 +136,21 @@ def create_asset(data: ContentAssetCreate, _: models.User = Depends(require_admi
     db.add(obj)
     db.commit()
     db.refresh(obj)
+    _log(db, obj.id, user, "created", f"สร้างแคมเปญ: {obj.campaign_name}")
+    db.commit()
     return obj
+
+
+@router.get("/{asset_id}/history")
+def asset_history(asset_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Audit trail for one campaign (who changed what, when)."""
+    obj = db.get(ContentAsset, asset_id)
+    if not obj or not _can_read(user, obj):
+        raise HTTPException(404, "Content asset not found")
+    rows = db.query(models.ChangeLog).filter(models.ChangeLog.asset_id == asset_id) \
+        .order_by(models.ChangeLog.created_at.desc()).limit(50).all()
+    return [{"actor": r.actor, "action": r.action, "summary": r.summary,
+             "at": r.created_at.isoformat()} for r in rows]
 
 
 @router.put("/{asset_id}", response_model=ContentAssetOut)
@@ -158,6 +178,8 @@ def update_asset(
     for key, value in changes.items():
         setattr(obj, key, value)
     _enforce_company(db, obj)
+    if changes:
+        _log(db, obj.id, user, "updated", "แก้ไข: " + ", ".join(sorted(changes.keys())))
     db.commit()
     db.refresh(obj)
     return obj
@@ -189,10 +211,11 @@ def update_drive_links(
 
 
 @router.delete("/{asset_id}", status_code=204)
-def delete_asset(asset_id: int, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_asset(asset_id: int, user: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(ContentAsset, asset_id)
     if not obj:
         raise HTTPException(404, "Content asset not found")
+    _log(db, asset_id, user, "deleted", f"ลบแคมเปญ: {obj.campaign_name}")
     db.delete(obj)
     db.commit()
 
