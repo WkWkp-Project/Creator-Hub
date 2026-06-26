@@ -25,6 +25,12 @@ if settings.is_production:
             "CORS_ORIGINS is '*' in production. Set it to your exact frontend "
             "origin(s), e.g. CORS_ORIGINS=https://app.yourdomain.com"
         )
+    if settings.database_url.strip().lower().startswith("sqlite"):
+        raise RuntimeError(
+            "Refusing to run in production on SQLite — its single-writer locking "
+            "breaks under concurrency and file storage is usually ephemeral (data "
+            "loss on redeploy). Set DATABASE_URL=postgresql+psycopg2://… for production."
+        )
 elif settings.using_default_secret:
     # Dev convenience, but make the risk visible in logs.
     print("[WARN] Using the default development SECRET_KEY — do NOT use in production.")

@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import DateTime, Integer, String, JSON, Text
+from sqlalchemy import DateTime, Integer, String, JSON, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -46,7 +46,7 @@ class ContentAsset(Base):
     # primary lead for back-compat; `responsible_member_ids` holds the full set so
     # a campaign can have several people responsible.
     responsible_member_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    responsible_member_ids: Mapped[list] = mapped_column(JSON, default=list)
+    responsible_member_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     period_start: Mapped[str] = mapped_column(String(40), default="")
     period_end: Mapped[str] = mapped_column(String(40), default="")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
@@ -57,21 +57,21 @@ class ContentAsset(Base):
     # Campaign-level Drive folder (stores JSON + media for this campaign).
     drive_folder_url: Mapped[str] = mapped_column(Text, default="")
     # Section A — the 4 approved input files (see DEFAULT_INPUT_FILES).
-    input_files: Mapped[list] = mapped_column(JSON, default=lambda: [dict(f) for f in DEFAULT_INPUT_FILES])
+    input_files: Mapped[list] = mapped_column(JSON, default=lambda: [dict(f) for f in DEFAULT_INPUT_FILES], server_default=text("'[]'"))
     # Merged from the legacy Campaign module: creators assigned to this campaign.
-    influencer_ids: Mapped[list] = mapped_column(JSON, default=list)
+    influencer_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     # Section B — per-KOL campaign rows (each pulled from the influencer directory)
     # + the campaign's selectable Scope-of-Work options. Flexible JSON so the row
     # shape can evolve without a migration. See docs for the field contract.
-    kols: Mapped[list] = mapped_column(JSON, default=list)
-    sow_options: Mapped[list] = mapped_column(JSON, default=list)
+    kols: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    sow_options: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     # Per-campaign access control — User ids granted access (managers edit /
     # viewers read). Set by admins only; admins always have access regardless.
-    assigned_user_ids: Mapped[list] = mapped_column(JSON, default=list)
+    assigned_user_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     # Which budget figures are shown to the customer. Keys: rate, gen_code_price,
     # boosting_cost, total. A missing/true key = shown; false = hidden from
     # viewers (admins/managers always see them, with an eye indicator).
-    budget_show: Mapped[dict] = mapped_column(JSON, default=dict)
+    budget_show: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

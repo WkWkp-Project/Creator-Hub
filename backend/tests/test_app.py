@@ -545,3 +545,7 @@ def test_production_config_flags():
     secure = Settings(environment="production", secret_key="a-real-strong-secret",
                       cors_origins="https://app.example.com", _env_file=None)
     assert not secure.using_default_secret and secure.origins == ["https://app.example.com"]
+    # Production must refuse SQLite (ephemeral / single-writer) — the boot guard.
+    on_sqlite = Settings(environment="production", secret_key="a-real-strong-secret",
+                         database_url="sqlite:///./x.db", _env_file=None)
+    assert on_sqlite.is_production and on_sqlite.database_url.lower().startswith("sqlite")

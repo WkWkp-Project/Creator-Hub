@@ -7,7 +7,7 @@ scope of work and past campaign history.
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -38,7 +38,7 @@ class Influencer(Base):
     # Social profile links keyed by platform, rendered as clickable icons:
     # {"instagram": "https://instagram.com/...", "tiktok": "...", "youtube": "...",
     #  "facebook": "...", "twitter": "...", "line": "...", "website": "..."}
-    social_links: Mapped[dict] = mapped_column(JSON, default=dict)
+    social_links: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
 
     # --- Audience metrics ---
     followers: Mapped[int] = mapped_column(Integer, default=0)        # total reach
@@ -46,7 +46,7 @@ class Influencer(Base):
     growth_30d: Mapped[float] = mapped_column(Float, default=0.0)       # % 30d
 
     # Per-platform breakdown: [{"platform": "YouTube", "metric": "Subscribers", "value": "850K"}]
-    platforms: Mapped[list] = mapped_column(JSON, default=list)
+    platforms: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     # --- Fee breakdown (the four costs the brief asks for) ---
     base_rate: Mapped[float] = mapped_column(Float, default=0.0)        # ค่าตัว
@@ -63,10 +63,10 @@ class Influencer(Base):
     fit_note: Mapped[str] = mapped_column(Text, default="")
 
     # Scope of work: [{"title": "1x YouTube Video", "detail": "8-12 min integrated"}]
-    scope_of_work: Mapped[list] = mapped_column(JSON, default=list)
+    scope_of_work: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     # Past campaigns: [{"brand": "Beauty Co", "campaign": "Launch promo", "views": "200k", "ctr": "15%"}]
-    past_campaigns: Mapped[list] = mapped_column(JSON, default=list)
+    past_campaigns: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     notes: Mapped[str] = mapped_column(Text, default="")
 
@@ -129,7 +129,7 @@ class Campaign(Base):
     budget: Mapped[float] = mapped_column(Float, default=0.0)
     currency: Mapped[str] = mapped_column(String(8), default="THB")
     # IDs of assigned influencers (kept simple as a JSON list).
-    influencer_ids: Mapped[list] = mapped_column(JSON, default=list)
+    influencer_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     notes: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
