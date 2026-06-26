@@ -75,6 +75,12 @@ def delete_member(member_id: int, _: models.User = Depends(require_admin), db: S
     obj = db.get(Member, member_id)
     if not obj:
         raise HTTPException(404, "Member not found")
+    # Scrub this member's id from campaign leads so a recycled id can't re-attach.
+    for a in db.query(ContentAsset).all():
+        if a.responsible_member_id == member_id or member_id in (a.responsible_member_ids or []):
+            a.responsible_member_ids = [x for x in (a.responsible_member_ids or []) if x != member_id]
+            if a.responsible_member_id == member_id:
+                a.responsible_member_id = (a.responsible_member_ids[0] if a.responsible_member_ids else None)
     db.delete(obj); db.commit()
 
 

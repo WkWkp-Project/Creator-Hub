@@ -99,7 +99,7 @@ def niche_performance(_: models.User = Depends(get_current_user), db: Session = 
 
 
 @router.get("/financials")
-def financials(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def financials(_: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     """Roster-wide financial roll-up derived from influencer fees + campaign budgets."""
     influencers = db.execute(select(models.Influencer)).scalars().all()
     base = sum(i.base_rate or 0 for i in influencers)
@@ -147,7 +147,7 @@ def financials(_: models.User = Depends(get_current_user), db: Session = Depends
 
 
 @router.get("/campaign-budgets")
-def campaign_budgets(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def campaign_budgets(_: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     """Real money flowing through the live campaign workspace (ContentAsset.kols),
     rolled up by brand, lead, and status — the figures finance actually wants."""
     assets = db.execute(select(ContentAsset)).scalars().all()
@@ -198,4 +198,4 @@ def activity(limit: int = 20, _: models.User = Depends(require_admin), db: Sessi
     """Recent campaign-change activity across the workspace (for the dashboard)."""
     rows = db.query(models.ChangeLog).order_by(models.ChangeLog.created_at.desc()).limit(limit).all()
     return [{"asset_id": r.asset_id, "actor": r.actor, "action": r.action,
-             "summary": r.summary, "at": r.created_at.isoformat()} for r in rows]
+             "summary": r.summary, "at": r.created_at.isoformat() + "Z"} for r in rows]

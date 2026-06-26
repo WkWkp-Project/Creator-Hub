@@ -38,6 +38,7 @@ _TABLES = {
     "content_assets": ContentAsset,
     "members": Member,
     "brands": Brand,
+    "change_logs": models.ChangeLog,
 }
 SNAPSHOT_VERSION = 1
 
@@ -152,7 +153,7 @@ def restore_backup(
 @router.get("/{filename}/download")
 def download_backup(
     filename: str,
-    _: models.User = Depends(get_current_user),
+    _: models.User = Depends(require_admin),
 ):
     target = BACKUP_DIR / Path(filename).name  # prevent path traversal
     if not target.exists():

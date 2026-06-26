@@ -519,6 +519,25 @@ def test_campaign_audit_log():
     client.delete(f"/api/assets/{a['id']}")
 
 
+def test_internal_endpoints_are_admin_only():
+    # A viewer (external customer) must NOT read org-wide budgets/financials or backups.
+    assert client.get("/api/stats/campaign-budgets", headers=VIEWER).status_code == 403
+    assert client.get("/api/stats/financials", headers=VIEWER).status_code == 403
+    # admin still can
+    assert client.get("/api/stats/campaign-budgets").status_code == 200
+
+
+def test_unsafe_url_neutralised_on_save():
+    a = client.post("/api/assets", json={
+        "campaign_name": "XSS Camp", "drive_folder_url": "javascript:alert(1)",
+        "kols": [{"influencer_id": 0, "link": "javascript:steal()"}]}).json()
+    assert a["drive_folder_url"] == ""            # javascript: stripped
+    assert a["kols"][0]["link"] == ""
+    ok = client.put(f"/api/assets/{a['id']}", json={"drive_folder_url": "https://drive.google.com/x"}).json()
+    assert ok["drive_folder_url"] == "https://drive.google.com/x"   # http(s) kept
+    client.delete(f"/api/assets/{a['id']}")
+
+
 def test_production_config_flags():
     from app.config import Settings, DEFAULT_SECRET
     insecure = Settings(environment="production", secret_key=DEFAULT_SECRET, _env_file=None)

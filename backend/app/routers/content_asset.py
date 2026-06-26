@@ -63,6 +63,24 @@ def _num(v) -> float:
         return 0.0
 
 
+def _safe_url(u) -> str:
+    """Allow only http(s) or root-relative URLs; strip javascript:/data:/vbscript:
+    so a stored link can never become an XSS sink when rendered as href."""
+    s = str(u or "").strip()
+    if not s:
+        return ""
+    return s if s.lower().startswith(("http://", "https://", "/")) else ""
+
+
+def _sanitize_urls(obj: ContentAsset) -> None:
+    """Neutralise any unsafe URLs stored on a campaign (drive folder + KOL links)."""
+    obj.drive_folder_url = _safe_url(obj.drive_folder_url)
+    if obj.kols:
+        obj.kols = [{**k, "link": _safe_url(k.get("link"))} if "link" in k else k for k in obj.kols]
+    if obj.input_files:
+        obj.input_files = [{**f, "drive_url": _safe_url(f.get("drive_url"))} if "drive_url" in f else f for f in obj.input_files]
+
+
 def _log(db: Session, asset_id: int, user: models.User, action: str, summary: str = "") -> None:
     """Append an audit-trail entry for a campaign change."""
     actor = user.full_name or user.email or user.username
@@ -76,7 +94,12 @@ def _redact_budget(asset: ContentAsset, user: models.User) -> None:
     if user.role != "viewer":
         return
     bshow = asset.budget_show or {}
-    hidden = [k for k in _BUDGET_KEYS if bshow.get(k) is False]
+    # Hiding the grand total must also blank every component for the viewer,
+    # otherwise they just sum the rows themselves.
+    if bshow.get("total") is False:
+        hidden = list(_BUDGET_KEYS)
+    else:
+        hidden = [k for k in _BUDGET_KEYS if bshow.get(k) is False]
     if hidden:
         asset.kols = [{**k, **{f: "" for f in hidden}} for k in (asset.kols or [])]
 
@@ -133,11 +156,12 @@ def create_asset(data: ContentAssetCreate, user: models.User = Depends(require_a
         values["budget_show"] = {}
     obj = ContentAsset(**values)
     _enforce_company(db, obj)
+    _sanitize_urls(obj)
     db.add(obj)
-    db.commit()
-    db.refresh(obj)
+    db.flush()   # assign id without committing, so the audit row lands atomically
     _log(db, obj.id, user, "created", f"สร้างแคมเปญ: {obj.campaign_name}")
     db.commit()
+    db.refresh(obj)
     return obj
 
 
@@ -150,7 +174,7 @@ def asset_history(asset_id: int, user: models.User = Depends(get_current_user), 
     rows = db.query(models.ChangeLog).filter(models.ChangeLog.asset_id == asset_id) \
         .order_by(models.ChangeLog.created_at.desc()).limit(50).all()
     return [{"actor": r.actor, "action": r.action, "summary": r.summary,
-             "at": r.created_at.isoformat()} for r in rows]
+             "at": r.created_at.isoformat() + "Z"} for r in rows]
 
 
 @router.put("/{asset_id}", response_model=ContentAssetOut)
@@ -178,6 +202,7 @@ def update_asset(
     for key, value in changes.items():
         setattr(obj, key, value)
     _enforce_company(db, obj)
+    _sanitize_urls(obj)
     if changes:
         _log(db, obj.id, user, "updated", "แก้ไข: " + ", ".join(sorted(changes.keys())))
     db.commit()
@@ -201,10 +226,11 @@ def update_drive_links(
     files = [dict(f) for f in (obj.input_files or [])]
     for f in files:
         if f.get("key") in links:
-            url = (links[f["key"]] or "").strip()
+            url = _safe_url(links[f["key"]])
             f["drive_url"] = url
             f["linked"] = bool(url)
     obj.input_files = files
+    _log(db, obj.id, user, "updated", "อัปเดตลิงก์ Drive")
     db.commit()
     db.refresh(obj)
     return obj

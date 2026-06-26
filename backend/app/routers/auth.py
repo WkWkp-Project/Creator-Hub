@@ -306,5 +306,11 @@ def delete_user(
         raise HTTPException(400, "You cannot delete your own account")
     if user.role == "admin" and db.query(models.User).filter(models.User.role == "admin").count() <= 1:
         raise HTTPException(400, "Cannot delete the last admin")
+    # Scrub this user's id from every campaign access grant so a future user that
+    # reuses the same id can never silently inherit the old grants.
+    from ..content_asset_models import ContentAsset
+    for a in db.query(ContentAsset).filter(ContentAsset.assigned_user_ids.isnot(None)).all():
+        if user.id in (a.assigned_user_ids or []):
+            a.assigned_user_ids = [x for x in a.assigned_user_ids if x != user.id]
     db.delete(user)
     db.commit()
