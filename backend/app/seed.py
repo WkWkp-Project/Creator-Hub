@@ -3,15 +3,14 @@
 Run with:  python -m app.seed
 """
 from .content_asset_models import ContentAsset
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal, engine
 from .directory_models import Brand, Member
-from .migrate import run_light_migrations
+from .migrate import run_migrations
 from .models import Campaign, Influencer, User
 from .security import hash_password
 from .services.tiers import tier_for_followers
 
-Base.metadata.create_all(bind=engine)
-run_light_migrations(engine)  # add columns to pre-existing tables before seeding
+run_migrations(engine)  # bring schema to head (Alembic) before seeding
 
 DEMO = [
     dict(

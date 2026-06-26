@@ -6,7 +6,7 @@ import os
 
 from .config import get_settings
 from .database import Base, engine
-from .migrate import run_light_migrations
+from .migrate import run_migrations
 from .routers import auth, backup, campaigns, content, content_asset, directory, imports, influencers, stats, uploads
 
 settings = get_settings()
@@ -35,10 +35,9 @@ elif settings.using_default_secret:
     # Dev convenience, but make the risk visible in logs.
     print("[WARN] Using the default development SECRET_KEY — do NOT use in production.")
 
-# Create tables on startup (simple bootstrap; use Alembic for real migrations).
-Base.metadata.create_all(bind=engine)
-# Add columns introduced after the initial schema (e.g. `tier`) to existing DBs.
-run_light_migrations(engine)
+# Bring the schema to head via Alembic (creates a fresh DB, stamps a legacy one,
+# or applies new revisions to an already-managed DB).
+run_migrations(engine)
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 

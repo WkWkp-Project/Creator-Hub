@@ -7,10 +7,35 @@ back-fill values. This keeps existing data intact without pulling in Alembic.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from .services.tiers import tier_for_followers
+
+
+def _alembic_config():
+    from alembic.config import Config
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parent.parent / "alembic"))
+    return cfg
+
+
+def run_migrations(engine: Engine) -> None:
+    """Bring the schema to head via Alembic. Fresh DBs are built from the
+    migrations; a legacy DB created by the old ``create_all`` path is *stamped*
+    at head so it adopts Alembic without recreating existing tables."""
+    from alembic import command
+
+    tables = set(inspect(engine).get_table_names())
+    cfg = _alembic_config()
+    if "alembic_version" in tables:
+        command.upgrade(cfg, "head")            # already managed → apply new revisions
+    elif tables:
+        command.stamp(cfg, "head")              # legacy schema → adopt in place
+    else:
+        command.upgrade(cfg, "head")            # fresh DB → build from migrations
 
 
 def run_light_migrations(engine: Engine) -> None:
