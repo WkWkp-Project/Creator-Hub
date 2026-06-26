@@ -102,7 +102,7 @@ def login(data: schemas.LoginRequest, request: Request, db: Session = Depends(ge
     user = db.query(models.User).filter(models.User.username == data.username).first()
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(401, "Invalid username or password")
-    token = create_token(username=user.username, role=user.role)
+    token = create_token(username=user.username, role=user.role, token_version=user.token_version or 0)
     return {"token": token, "user": user}
 
 
@@ -156,7 +156,7 @@ def google_login(data: schemas.GoogleLoginRequest, request: Request, db: Session
 
     db.commit()
     db.refresh(user)
-    token = create_token(username=user.username, role=user.role)
+    token = create_token(username=user.username, role=user.role, token_version=user.token_version or 0)
     return {"token": token, "user": user}
 
 
@@ -278,6 +278,7 @@ def reset_user_password(
     if not user:
         raise HTTPException(404, "User not found")
     user.password_hash = hash_password(data.new_password)
+    user.token_version = (user.token_version or 0) + 1   # force re-login (offboard / reset)
     db.commit()
 
 
@@ -290,6 +291,14 @@ def change_own_password(
     if not data.current_password or not verify_password(data.current_password, user.password_hash):
         raise HTTPException(400, "Current password is incorrect")
     user.password_hash = hash_password(data.new_password)
+    user.token_version = (user.token_version or 0) + 1   # revoke other sessions
+    db.commit()
+
+
+@router.post("/logout", status_code=204)
+def logout(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Revoke every outstanding token for the caller (all devices)."""
+    user.token_version = (user.token_version or 0) + 1
     db.commit()
 
 

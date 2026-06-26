@@ -32,6 +32,10 @@ def get_current_user(
     user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
     if not user:
         raise HTTPException(401, "User no longer exists")
+    # Reject tokens issued before the user's current token_version (revoked).
+    if int(payload.get("tv", 0)) != int(user.token_version or 0):
+        raise HTTPException(401, "Session expired — please sign in again",
+                            headers={"WWW-Authenticate": "Bearer"})
     return user
 
 

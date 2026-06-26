@@ -106,6 +106,10 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(160), default="")
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(20), default="viewer", index=True)
+    # Incremented to revoke all of this user's outstanding tokens (logout /
+    # password change / admin force-logout). A token is valid only if its `tv`
+    # claim matches this.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # Directory fields (folded in from the old Members page): the org/company this
     # person belongs to, their job position, and a free-text note.
     organization: Mapped[str] = mapped_column(String(160), default="")

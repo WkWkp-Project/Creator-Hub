@@ -1760,6 +1760,8 @@
   }
 
   function logout() {
+    // Revoke the token server-side (kills all sessions), then clear locally.
+    try { api("/auth/logout", { method: "POST" }).catch(() => {}); } catch (_) {}
     setAuth(null);
     document.querySelector("#profile-menu")?.remove();
     showLogin();

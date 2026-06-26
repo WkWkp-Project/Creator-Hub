@@ -519,6 +519,24 @@ def test_campaign_audit_log():
     client.delete(f"/api/assets/{a['id']}")
 
 
+def test_token_revocation_on_logout():
+    client.post("/api/auth/users", json={"username": "revoke_me", "password": "pw1234", "role": "viewer"})
+    tok = client.post("/api/auth/login", json={"username": "revoke_me", "password": "pw1234"}).json()["token"]
+    H = {"Authorization": f"Bearer {tok}"}
+    assert client.get("/api/auth/me", headers=H).status_code == 200
+    assert client.post("/api/auth/logout", headers=H).status_code == 204
+    assert client.get("/api/auth/me", headers=H).status_code == 401   # old token revoked
+    # a fresh login still works
+    tok2 = client.post("/api/auth/login", json={"username": "revoke_me", "password": "pw1234"}).json()["token"]
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok2}"}).status_code == 200
+    # password change also revokes outstanding tokens
+    assert client.put("/api/auth/password", json={"current_password": "pw1234", "new_password": "pw5678"},
+                      headers={"Authorization": f"Bearer {tok2}"}).status_code == 204
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok2}"}).status_code == 401
+    uid = next(u["id"] for u in client.get("/api/auth/users").json() if u["username"] == "revoke_me")
+    client.delete(f"/api/auth/users/{uid}")
+
+
 def test_internal_endpoints_are_admin_only():
     # A viewer (external customer) must NOT read org-wide budgets/financials or backups.
     assert client.get("/api/stats/campaign-budgets", headers=VIEWER).status_code == 403
