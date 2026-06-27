@@ -96,11 +96,14 @@ def list_backups(_: models.User = Depends(require_admin)):
 
 
 @router.post("", status_code=201)
-def create_backup(_: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def create_backup(actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     payload = _snapshot_payload(db)
     stamp = datetime.fromisoformat(payload["created_at"]).strftime("%Y%m%d_%H%M%S")
     filename = f"backup_{stamp}.json"
     (BACKUP_DIR / filename).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    from .. import audit
+    audit.record(db, entity="backup", user=actor, action="created", summary=f"สร้าง backup: {filename}")
+    db.commit()
     return {
         "filename": filename,
         "created_at": payload["created_at"],
@@ -111,7 +114,7 @@ def create_backup(_: models.User = Depends(require_admin), db: Session = Depends
 @router.post("/restore")
 def restore_backup(
     body: dict | None = None,
-    _: models.User = Depends(require_admin),
+    actor: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Recall a snapshot. Defaults to the latest; pass {"filename": "..."} to choose."""
@@ -145,6 +148,9 @@ def restore_backup(
         rows = data.get(name, [])
         db.add_all([_deserialize(model, row) for row in rows])
         restored[name] = len(rows)
+    from .. import audit
+    audit.record(db, entity="backup", user=actor, action="restored",
+                 summary=f"กู้คืนจาก {target.name}", detail={"counts": restored})
     db.commit()
 
     return {"restored_from": target.name, "created_at": data.get("created_at"), "counts": restored}

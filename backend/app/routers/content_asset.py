@@ -81,10 +81,11 @@ def _sanitize_urls(obj: ContentAsset) -> None:
         obj.input_files = [{**f, "drive_url": _safe_url(f.get("drive_url"))} if "drive_url" in f else f for f in obj.input_files]
 
 
-def _log(db: Session, asset_id: int, user: models.User, action: str, summary: str = "") -> None:
-    """Append an audit-trail entry for a campaign change."""
-    actor = user.full_name or user.email or user.username
-    db.add(models.ChangeLog(asset_id=asset_id, actor=actor, action=action, summary=summary[:400]))
+def _log(db: Session, asset_id: int, user: models.User, action: str, summary: str = "", detail: dict | None = None) -> None:
+    """Append a campaign audit-trail entry (via the central recorder)."""
+    from .. import audit
+    audit.record(db, entity="campaign", entity_id=asset_id, user=user,
+                 action=action, summary=summary, detail=detail)
 
 
 def _redact_budget(asset: ContentAsset, user: models.User) -> None:
@@ -171,10 +172,11 @@ def asset_history(asset_id: int, user: models.User = Depends(get_current_user), 
     obj = db.get(ContentAsset, asset_id)
     if not obj or not _can_read(user, obj):
         raise HTTPException(404, "Content asset not found")
-    rows = db.query(models.ChangeLog).filter(models.ChangeLog.asset_id == asset_id) \
-        .order_by(models.ChangeLog.created_at.desc()).limit(50).all()
-    return [{"actor": r.actor, "action": r.action, "summary": r.summary,
-             "at": r.created_at.isoformat() + "Z"} for r in rows]
+    rows = db.query(models.ChangeLog).filter(
+        models.ChangeLog.entity == "campaign", models.ChangeLog.asset_id == asset_id
+    ).order_by(models.ChangeLog.created_at.desc()).limit(50).all()
+    return [{"actor": r.actor, "actor_id": r.actor_id, "action": r.action,
+             "summary": r.summary, "detail": r.detail, "at": r.created_at.isoformat() + "Z"} for r in rows]
 
 
 @router.put("/{asset_id}", response_model=ContentAssetOut)
@@ -204,13 +206,16 @@ def update_asset(
             changes[k] = []
     if "budget_show" in changes and changes["budget_show"] is None:
         changes["budget_show"] = {}
+    old_status = obj.status
     for key, value in changes.items():
         setattr(obj, key, value)
     _enforce_company(db, obj)
     _sanitize_urls(obj)
     if changes:
         obj.row_version = (obj.row_version or 1) + 1
-        _log(db, obj.id, user, "updated", "แก้ไข: " + ", ".join(sorted(changes.keys())))
+        detail = ({"status": {"from": old_status, "to": obj.status}}
+                  if "status" in changes and old_status != obj.status else None)
+        _log(db, obj.id, user, "updated", "แก้ไข: " + ", ".join(sorted(changes.keys())), detail=detail)
     db.commit()
     db.refresh(obj)
     return obj

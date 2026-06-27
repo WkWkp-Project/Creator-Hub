@@ -148,8 +148,16 @@ class ChangeLog(Base):
     __tablename__ = "change_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    asset_id: Mapped[int] = mapped_column(Integer, index=True)
+    # What was touched: entity ("campaign" / "user" / "member" / "brand" / "auth"
+    # / "import" / "backup") and its id (asset_id is the generic entity id).
+    entity: Mapped[str] = mapped_column(String(20), default="campaign", server_default=text("'campaign'"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Who did it — display name plus the immutable user id (non-repudiation;
+    # renaming the user can't rewrite who acted).
     actor: Mapped[str] = mapped_column(String(160), default="")
-    action: Mapped[str] = mapped_column(String(20), default="updated")  # created/updated/deleted
+    actor_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(20), default="updated")  # created/updated/deleted/login/logout/...
     summary: Mapped[str] = mapped_column(String(400), default="")
+    # Optional before/after for sensitive changes, e.g. {"role": {"from","to"}}.
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

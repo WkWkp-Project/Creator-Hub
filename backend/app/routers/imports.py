@@ -186,7 +186,7 @@ async def preview(file: UploadFile = File(...), _: models.User = Depends(require
 
 @router.post("/commit", response_model=schemas.ImportResult)
 def commit(payload: schemas.ImportCommit,
-           _: models.User = Depends(require_admin),
+           actor: models.User = Depends(require_admin),
            db: Session = Depends(get_db)):
     # upload_id is a server-generated uuid4 hex — reject anything else so it can
     # never be used to traverse outside the cache dir.
@@ -257,6 +257,10 @@ def commit(payload: schemas.ImportCommit,
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Row {int(idx) + 2}: {exc}")
 
+    from .. import audit
+    audit.record(db, entity="import", user=actor, action="commit",
+                 summary=f"นำเข้าอินฟลู: created {created}, updated {updated}, skipped {skipped}",
+                 detail={"created": created, "updated": updated, "skipped": skipped, "errors": len(errors)})
     db.commit()
 
     # cleanup cache

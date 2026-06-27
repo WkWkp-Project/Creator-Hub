@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import audit, models, schemas
 from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user, require_admin
@@ -103,6 +103,8 @@ def login(data: schemas.LoginRequest, request: Request, db: Session = Depends(ge
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(401, "Invalid username or password")
     token = create_token(username=user.username, role=user.role, token_version=user.token_version or 0)
+    audit.record(db, entity="auth", action="login", user=user, summary="เข้าสู่ระบบ")
+    db.commit()
     return {"token": token, "user": user}
 
 
@@ -157,6 +159,8 @@ def google_login(data: schemas.GoogleLoginRequest, request: Request, db: Session
     db.commit()
     db.refresh(user)
     token = create_token(username=user.username, role=user.role, token_version=user.token_version or 0)
+    audit.record(db, entity="auth", action="login", user=user, summary="เข้าสู่ระบบด้วย Google")
+    db.commit()
     return {"token": token, "user": user}
 
 
@@ -220,7 +224,7 @@ def list_users(_: models.User = Depends(require_admin), db: Session = Depends(ge
 @router.post("/users", response_model=schemas.UserOut, status_code=201)
 def create_user(
     data: schemas.UserCreate,
-    _: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if db.query(models.User).filter(models.User.username == data.username).first():
@@ -237,6 +241,9 @@ def create_user(
     )
     db.add(user)
     _sync_member_for_user(db, user)   # keep the people directory in sync
+    db.flush()
+    audit.record(db, entity="user", entity_id=user.id, user=admin, action="created",
+                 summary=f"สร้างผู้ใช้: {user.username} (role={user.role})")
     db.commit()
     db.refresh(user)
     return user
@@ -259,9 +266,14 @@ def update_user(
     if new_role and new_role != "admin" and user.role == "admin" and \
             db.query(models.User).filter(models.User.role == "admin").count() <= 1:
         raise HTTPException(400, "Cannot demote the last admin")
+    old_role = user.role
     for key, value in changes.items():
         setattr(user, key, value)
     _sync_member_for_user(db, user)   # propagate name/role changes to the directory
+    detail = ({"role": {"from": old_role, "to": user.role}}
+              if new_role and old_role != user.role else None)
+    audit.record(db, entity="user", entity_id=user.id, user=admin, action="updated",
+                 summary=f"แก้ไขผู้ใช้: {user.username} ({', '.join(sorted(changes))})", detail=detail)
     db.commit()
     db.refresh(user)
     return user
@@ -271,7 +283,7 @@ def update_user(
 def reset_user_password(
     user_id: int,
     data: schemas.PasswordChange,
-    _: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     user = db.get(models.User, user_id)
@@ -279,6 +291,8 @@ def reset_user_password(
         raise HTTPException(404, "User not found")
     user.password_hash = hash_password(data.new_password)
     user.token_version = (user.token_version or 0) + 1   # force re-login (offboard / reset)
+    audit.record(db, entity="user", entity_id=user.id, user=admin,
+                 action="password_reset", summary=f"รีเซ็ตรหัสผ่าน + บังคับออกจากระบบ: {user.username}")
     db.commit()
 
 
@@ -292,6 +306,8 @@ def change_own_password(
         raise HTTPException(400, "Current password is incorrect")
     user.password_hash = hash_password(data.new_password)
     user.token_version = (user.token_version or 0) + 1   # revoke other sessions
+    audit.record(db, entity="user", entity_id=user.id, user=user,
+                 action="password_change", summary="เปลี่ยนรหัสผ่านตนเอง")
     db.commit()
 
 
@@ -299,6 +315,7 @@ def change_own_password(
 def logout(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Revoke every outstanding token for the caller (all devices)."""
     user.token_version = (user.token_version or 0) + 1
+    audit.record(db, entity="auth", action="logout", user=user, summary="ออกจากระบบ (เพิกถอนทุก session)")
     db.commit()
 
 
@@ -321,5 +338,7 @@ def delete_user(
     for a in db.query(ContentAsset).filter(ContentAsset.assigned_user_ids.isnot(None)).all():
         if user.id in (a.assigned_user_ids or []):
             a.assigned_user_ids = [x for x in a.assigned_user_ids if x != user.id]
+    audit.record(db, entity="user", entity_id=user.id, user=admin, action="deleted",
+                 summary=f"ลบผู้ใช้: {user.username} ({user.role})")
     db.delete(user)
     db.commit()

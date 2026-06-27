@@ -554,6 +554,22 @@ def test_token_revocation_on_logout():
     client.delete(f"/api/auth/users/{uid}")
 
 
+def test_audit_trail_coverage():
+    # A login is audited; activity entries carry an immutable actor_id + entity.
+    client.post("/api/auth/login", json={"username": "viewer", "password": "viewer123"})
+    acts = client.get("/api/stats/activity?limit=50").json()
+    assert any(a["entity"] == "auth" and a["action"] == "login" for a in acts)
+    assert all(("actor_id" in a and "entity" in a) for a in acts)
+    # A user role change records before/after in `detail`.
+    u = client.post("/api/auth/users", json={"username": "audit_u", "password": "pw1234", "role": "viewer"}).json()
+    client.put(f"/api/auth/users/{u['id']}", json={"role": "manager"})
+    acts = client.get("/api/stats/activity?limit=50").json()
+    role_change = next(a for a in acts if a["entity"] == "user" and a.get("detail") and a["detail"].get("role"))
+    assert role_change["detail"]["role"] == {"from": "viewer", "to": "manager"}
+    assert role_change["actor_id"] is not None   # who did it, by id
+    client.delete(f"/api/auth/users/{u['id']}")
+
+
 def test_internal_endpoints_are_admin_only():
     # A viewer (external customer) must NOT read org-wide budgets/financials or backups.
     assert client.get("/api/stats/campaign-budgets", headers=VIEWER).status_code == 403

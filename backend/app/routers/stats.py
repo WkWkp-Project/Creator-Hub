@@ -197,5 +197,6 @@ def campaign_budgets(_: models.User = Depends(require_admin), db: Session = Depe
 def activity(limit: int = 20, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     """Recent campaign-change activity across the workspace (for the dashboard)."""
     rows = db.query(models.ChangeLog).order_by(models.ChangeLog.created_at.desc()).limit(limit).all()
-    return [{"asset_id": r.asset_id, "actor": r.actor, "action": r.action,
-             "summary": r.summary, "at": r.created_at.isoformat() + "Z"} for r in rows]
+    return [{"entity": r.entity, "entity_id": r.asset_id, "asset_id": r.asset_id,
+             "actor": r.actor, "actor_id": r.actor_id, "action": r.action,
+             "summary": r.summary, "detail": r.detail, "at": r.created_at.isoformat() + "Z"} for r in rows]

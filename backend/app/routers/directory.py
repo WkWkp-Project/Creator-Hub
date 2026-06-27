@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import audit, models
 from ..content_asset_models import ContentAsset
 from ..database import get_db
 from ..deps import get_current_user, require_admin
@@ -50,31 +50,42 @@ def list_members(_: models.User = Depends(get_current_user), db: Session = Depen
 
 
 @router.post("/members", response_model=MemberOut, status_code=201)
-def create_member(data: MemberCreate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def create_member(data: MemberCreate, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = Member(**data.model_dump())
     db.add(obj)
     _sync_user_for_member(db, obj)   # ensure a matching login account exists + in sync
+    db.flush()
+    audit.record(db, entity="member", entity_id=obj.id, user=actor, action="created",
+                 summary=f"สร้างสมาชิก: {obj.name} (role={obj.role})")
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.put("/members/{member_id}", response_model=MemberOut)
-def update_member(member_id: int, data: MemberUpdate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def update_member(member_id: int, data: MemberUpdate, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(Member, member_id)
     if not obj:
         raise HTTPException(404, "Member not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    old_role = obj.role
+    changes = data.model_dump(exclude_unset=True)
+    for k, v in changes.items():
         setattr(obj, k, v)
     _sync_user_for_member(db, obj)   # propagate role to the matching login account
+    detail = ({"role": {"from": old_role, "to": obj.role}}
+              if "role" in changes and old_role != obj.role else None)
+    audit.record(db, entity="member", entity_id=obj.id, user=actor, action="updated",
+                 summary=f"แก้ไขสมาชิก: {obj.name}", detail=detail)
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete("/members/{member_id}", status_code=204)
-def delete_member(member_id: int, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_member(member_id: int, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(Member, member_id)
     if not obj:
         raise HTTPException(404, "Member not found")
+    audit.record(db, entity="member", entity_id=member_id, user=actor, action="deleted",
+                 summary=f"ลบสมาชิก: {obj.name}")
     # Scrub this member's id from campaign leads so a recycled id can't re-attach.
     for a in db.query(ContentAsset).all():
         if a.responsible_member_id == member_id or member_id in (a.responsible_member_ids or []):
@@ -92,16 +103,18 @@ def list_brands(_: models.User = Depends(get_current_user), db: Session = Depend
 
 
 @router.post("/brands", response_model=BrandOut, status_code=201)
-def create_brand(data: BrandCreate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def create_brand(data: BrandCreate, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     if db.execute(select(Brand).where(Brand.name.ilike(data.name))).scalars().first():
         raise HTTPException(400, "Brand already exists")
     obj = Brand(**data.model_dump())
-    db.add(obj); db.commit(); db.refresh(obj)
+    db.add(obj); db.flush()
+    audit.record(db, entity="brand", entity_id=obj.id, user=actor, action="created", summary=f"สร้างแบรนด์: {obj.name}")
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.put("/brands/{brand_id}", response_model=BrandOut)
-def update_brand(brand_id: int, data: BrandUpdate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def update_brand(brand_id: int, data: BrandUpdate, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(Brand, brand_id)
     if not obj:
         raise HTTPException(404, "Brand not found")
@@ -114,13 +127,16 @@ def update_brand(brand_id: int, data: BrandUpdate, _: models.User = Depends(requ
         db.query(ContentAsset).filter(ContentAsset.brand_id == obj.id).update(
             {ContentAsset.client_name: obj.company}, synchronize_session=False
         )
+    audit.record(db, entity="brand", entity_id=obj.id, user=actor, action="updated",
+                 summary=f"แก้ไขแบรนด์: {obj.name} ({', '.join(sorted(changes))})")
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete("/brands/{brand_id}", status_code=204)
-def delete_brand(brand_id: int, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_brand(brand_id: int, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(Brand, brand_id)
     if not obj:
         raise HTTPException(404, "Brand not found")
+    audit.record(db, entity="brand", entity_id=brand_id, user=actor, action="deleted", summary=f"ลบแบรนด์: {obj.name}")
     db.delete(obj); db.commit()
