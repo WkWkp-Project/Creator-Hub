@@ -13,7 +13,7 @@
 
   async function saveKols(a, kols) {
     a.kols = kols;
-    await saveAsset(a.id, { kols });
+    await saveAsset(a.id, { kols }, a);
   }
 
   function renderKolTable(host, a, roster) {
@@ -148,7 +148,7 @@
       b.classList.toggle("on", newVis);
       b.querySelector(".material-symbols-outlined").textContent = newVis ? "visibility" : "visibility_off";
       b.closest(".kol-tot").classList.toggle("is-cust-hidden", !newVis);
-      saveAsset(a.id, { budget_show: a.budget_show }).catch((e) => toast(e.message, "err"));
+      saveAsset(a.id, { budget_show: a.budget_show }, a).catch((e) => toast(e.message, "err"));
     }));
 
     if (!admin) return;
@@ -239,7 +239,7 @@
     m.querySelector("[data-add]").addEventListener("click", async () => {
       const v = m.querySelector("#sn").value.trim(); if (!v) return;
       a.sow_options = [...opts(), v];
-      try { await saveAsset(a.id, { sow_options: a.sow_options }); } catch (e) { return toast(e.message, "err"); }
+      try { await saveAsset(a.id, { sow_options: a.sow_options }, a); } catch (e) { return toast(e.message, "err"); }
       m.querySelector("#sl").appendChild(el(`<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(v)}" checked/>${esc(v)}</label>`));
       m.querySelector("#sn").value = "";
     });
@@ -309,7 +309,7 @@
       <div class="flex gap-sm"><input id="son" class="${inpCls}" placeholder="เพิ่ม SOW เช่น VDO Review"/><button data-add class="px-md py-2 rounded-lg bg-primary text-on-primary shrink-0">เพิ่ม</button></div>
       <div id="sol" class="flex flex-col gap-1 mt-sm"></div>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`);
     const listEl = m.querySelector("#sol");
-    const save = (opts) => saveAsset(a.id, { sow_options: opts });
+    const save = (opts) => saveAsset(a.id, { sow_options: opts }, a);
     const refresh = () => {
       listEl.innerHTML = (a.sow_options || []).length ? (a.sow_options || []).map((o, i) => `<div class="flex items-center gap-sm py-1 border-b border-outline-variant/50"><span class="flex-1 text-[14px]">${esc(o)}</span><button data-del="${i}" class="text-on-surface-variant hover:text-error"><span class="material-symbols-outlined text-[18px]">delete</span></button></div>`).join("") : `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ</div>`;
       listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => { a.sow_options.splice(+b.getAttribute("data-del"), 1); try { await save(a.sow_options); refresh(); } catch (e) { toast(e.message, "err"); } }));

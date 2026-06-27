@@ -64,7 +64,7 @@
     if (!res.ok) {
       let msg = res.statusText;
       try { msg = (await res.json()).detail || msg; } catch (_) {}
-      throw new Error(msg);
+      const err = new Error(msg); err.status = res.status; throw err;
     }
     return res.status === 204 ? null : res.json();
   }

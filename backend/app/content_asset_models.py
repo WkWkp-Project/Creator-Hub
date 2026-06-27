@@ -72,6 +72,9 @@ class ContentAsset(Base):
     # boosting_cost, total. A missing/true key = shown; false = hidden from
     # viewers (admins/managers always see them, with an eye indicator).
     budget_show: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # Optimistic-concurrency counter — bumped on every update; a PUT carrying a
+    # stale row_version is rejected (409) so concurrent edits can't silently clobber.
+    row_version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -135,6 +138,7 @@ class ContentAssetUpdate(BaseModel):
     budget_show: dict[str, bool] | None = None
     kols: list[dict[str, Any]] | None = None
     sow_options: list[str] | None = None
+    row_version: int | None = None   # the version the client loaded (optimistic lock)
 
     @field_validator("status")
     @classmethod
@@ -147,6 +151,7 @@ class ContentAssetUpdate(BaseModel):
 class ContentAssetOut(ContentAssetBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    row_version: int = 1
     input_files: list[dict[str, Any]] = Field(default_factory=list)
     kols: list[dict[str, Any]] = Field(default_factory=list)
     sow_options: list[str] = Field(default_factory=list)

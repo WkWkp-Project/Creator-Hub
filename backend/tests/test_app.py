@@ -519,6 +519,23 @@ def test_campaign_audit_log():
     client.delete(f"/api/assets/{a['id']}")
 
 
+def test_optimistic_locking_conflict():
+    a = client.post("/api/assets", json={"campaign_name": "Lock Camp", "drive_folder_url": "x"}).json()
+    v0 = a["row_version"]
+    # first save with the loaded version succeeds and bumps the version
+    r1 = client.put(f"/api/assets/{a['id']}", json={"status": "active", "row_version": v0}).json()
+    assert r1["row_version"] == v0 + 1
+    # a second save still using the STALE version is rejected with 409
+    conflict = client.put(f"/api/assets/{a['id']}", json={"status": "paused", "row_version": v0})
+    assert conflict.status_code == 409
+    # saving with the fresh version works again
+    r2 = client.put(f"/api/assets/{a['id']}", json={"status": "paused", "row_version": r1["row_version"]})
+    assert r2.status_code == 200
+    # a save with no row_version (older client) is allowed (backward compatible)
+    assert client.put(f"/api/assets/{a['id']}", json={"status": "draft"}).status_code == 200
+    client.delete(f"/api/assets/{a['id']}")
+
+
 def test_token_revocation_on_logout():
     client.post("/api/auth/users", json={"username": "revoke_me", "password": "pw1234", "role": "viewer"})
     tok = client.post("/api/auth/login", json={"username": "revoke_me", "password": "pw1234"}).json()["token"]

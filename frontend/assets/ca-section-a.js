@@ -14,7 +14,7 @@
     const inputFiles = (a.input_files || []).map((f) => ({ ...f }));
     while (inputFiles.length <= slotIndex) inputFiles.push({ key: "slot_" + inputFiles.length, linked: false });
     inputFiles[slotIndex].thumb = thumbUrl;
-    await saveAsset(a.id, { input_files: inputFiles });
+    await saveAsset(a.id, { input_files: inputFiles }, a);
   }
 
   function cardsHtml(a) {

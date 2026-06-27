@@ -190,6 +190,11 @@ def update_asset(
     if not _can_edit(user, obj):
         raise HTTPException(403, "คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (แก้ไขไม่ได้)")
     changes = data.model_dump(exclude_unset=True)
+    # Optimistic concurrency: if the client sent the version it loaded and the row
+    # has since moved on, reject rather than silently overwrite the other edit.
+    expected = changes.pop("row_version", None)
+    if expected is not None and (obj.row_version or 1) != expected:
+        raise HTTPException(409, "แคมเปญถูกแก้ไขโดยผู้อื่นไปแล้ว — โปรดโหลดเวอร์ชันล่าสุดก่อนบันทึก")
     if user.role != "admin":
         changes = {k: v for k, v in changes.items() if k not in ADMIN_ONLY_FIELDS}
     # JSON list/dict columns must never be set to None (the response model requires
@@ -204,6 +209,7 @@ def update_asset(
     _enforce_company(db, obj)
     _sanitize_urls(obj)
     if changes:
+        obj.row_version = (obj.row_version or 1) + 1
         _log(db, obj.id, user, "updated", "แก้ไข: " + ", ".join(sorted(changes.keys())))
     db.commit()
     db.refresh(obj)

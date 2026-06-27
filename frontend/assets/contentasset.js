@@ -121,8 +121,21 @@
     api, el, esc, toast, isAdmin, render, fmtNum, uploadFile, mediaSrc,
     modal, inpCls, lbl, sectionAFiles,
     money: (n) => "฿" + (Number(n) || 0).toLocaleString("en-US"),
-    saveAsset: (id, patch) => api("/assets/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
-      .then((res) => { try { if (activeAssetRef && activeAssetRef.id === id) recordVersion(activeAssetRef); } catch (_) {} return res; }),
+    // Optimistic-concurrency aware: pass the asset object `a` so the loaded
+    // row_version rides along (and the fresh version is tracked back onto it).
+    // A 409 means someone else saved first → reload the latest state.
+    saveAsset: async (id, patch, a) => {
+      if (a && a.row_version != null) patch = { ...patch, row_version: a.row_version };
+      try {
+        const res = await api("/assets/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+        if (a && res && res.row_version != null) a.row_version = res.row_version;
+        try { if (activeAssetRef && activeAssetRef.id === id) recordVersion(activeAssetRef); } catch (_) {}
+        return res;
+      } catch (e) {
+        if (e.status === 409) { toast("มีคนอื่นแก้แคมเปญนี้ไปแล้ว — กำลังโหลดเวอร์ชันล่าสุด", "err"); render(); }
+        throw e;
+      }
+    },
     // directory creators (fresh each call so newly-added creators show up)
     roster: async () => { try { return (await api("/influencers?limit=200")).items; } catch (_) { return []; } },
     // Per-campaign edit permission: admin (all) or a manager assigned to it.
@@ -499,9 +512,13 @@
           responsible_member_ids: respIds, responsible_member_id: respIds[0] || null,
         };
         if (admin) body.assigned_user_ids = [...m.querySelectorAll(".ed-acc:checked")].map((c) => +c.value);
+        body.row_version = a.row_version;   // optimistic lock
         await api("/assets/" + a.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         toast("บันทึกแล้ว"); m.remove(); render();
-      } catch (e) { toast(e.message, "err"); }
+      } catch (e) {
+        if (e.status === 409) { toast("มีคนอื่นแก้แคมเปญนี้ไปแล้ว — กำลังโหลดเวอร์ชันล่าสุด", "err"); m.remove(); render(); }
+        else toast(e.message, "err");
+      }
     });
     m.querySelector("[data-reset]")?.addEventListener("click", async () => {
       if (!confirm("Reset แคมเปญ? (ล้าง brief/tags/stakeholders, สถานะ→draft, ยกเลิกลิงก์ไฟล์ทั้งหมด — ชื่อยังอยู่)")) return;

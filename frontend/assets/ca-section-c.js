@@ -172,7 +172,7 @@
     const m = modal(`Performance — ${box.label}`, box.icon, body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`, "max-w-7xl");
     if (!admin) return;
     let timer;
-    const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveAsset(a.id, { kols: a.kols }).then(rerender).catch((e) => toast(e.message, "err")), 600); };
+    const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveAsset(a.id, { kols: a.kols }, a).then(rerender).catch((e) => toast(e.message, "err")), 600); };
     m.querySelectorAll("[data-pf]").forEach((inp) => {
       const key = inp.getAttribute("data-pf"), i = +inp.getAttribute("data-i");
       inp.addEventListener("input", () => {
@@ -277,7 +277,7 @@
         const k = a.kols[i]; k.metrics = Object.assign({}, k.metrics || {});
         Object.keys(vals).forEach((f) => { if (f === "ad_spend") k.boosting_cost = vals[f]; else k.metrics[f] = vals[f]; });
       });
-      try { await saveAsset(a.id, { kols: a.kols }); toast(`นำเข้าผล ${parsed.length} KOL แล้ว ✓`); m.remove(); rerender(); }
+      try { await saveAsset(a.id, { kols: a.kols }, a); toast(`นำเข้าผล ${parsed.length} KOL แล้ว ✓`); m.remove(); rerender(); }
       catch (e) { toast(e.message, "err"); }
     });
   }
