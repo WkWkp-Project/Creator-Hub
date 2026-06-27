@@ -297,12 +297,29 @@ def test_import_commit_rejects_bad_upload_id():
 
 def test_login_rate_limit():
     from app import ratelimit
-    ratelimit._hits.clear()  # clean slate for a deterministic test
+    ratelimit._hits.clear(); ratelimit._failures.clear()  # clean slate
     last = None
     for _ in range(12):
         last = client.post("/api/auth/login", json={"username": "nobody", "password": "x"})
-    assert last.status_code == 429  # eventually throttled
-    ratelimit._hits.clear()  # don't leak throttle state into other tests
+    assert last.status_code == 429  # throttled (IP limit or per-account lockout)
+    ratelimit._hits.clear(); ratelimit._failures.clear()  # don't leak into other tests
+
+
+def test_password_policy_and_account_lockout():
+    from app import ratelimit
+    # weak / common passwords are rejected on create
+    assert client.post("/api/auth/users", json={"username": "weak1", "password": "short"}).status_code == 422
+    assert client.post("/api/auth/users", json={"username": "weak2", "password": "admin123"}).status_code == 422
+    ok = client.post("/api/auth/users", json={"username": "lockme", "password": "qa-pass-99", "role": "viewer"})
+    assert ok.status_code == 201
+    # 5 bad logins lock the account, then even the CORRECT password is refused (429)
+    for _ in range(5):
+        client.post("/api/auth/login", json={"username": "lockme", "password": "nope"})
+    locked = client.post("/api/auth/login", json={"username": "lockme", "password": "qa-pass-99"})
+    assert locked.status_code == 429
+    ratelimit._failures.clear()  # unlock for cleanup
+    assert client.post("/api/auth/login", json={"username": "lockme", "password": "qa-pass-99"}).status_code == 200
+    client.delete(f"/api/auth/users/{ok.json()['id']}")
 
 
 def test_content_brief_crud_and_roles():
@@ -424,7 +441,7 @@ def test_user_carries_org_note_and_syncs_to_member():
     # The merged User page carries Organization + Note (folded in from Members)
     # and syncs them onto the linked directory Member.
     created = client.post("/api/auth/users", json={
-        "username": "orguser", "password": "pw1234", "email": "org@x.com",
+        "username": "orguser", "password": "qa-pass-12", "email": "org@x.com",
         "full_name": "Org User", "role": "viewer",
         "organization": "Wakuwaku", "note": "VIP contact"})
     assert created.status_code == 201
@@ -442,7 +459,7 @@ def test_admin_can_be_demoted_to_manager_when_not_last():
     # Demoting a non-last admin to manager (the new role) must be allowed —
     # the last-admin guard should only fire when this is the only admin left.
     extra = client.post("/api/auth/users", json={
-        "username": "extra_admin_qa", "password": "pw1234", "role": "admin"}).json()
+        "username": "extra_admin_qa", "password": "qa-pass-12", "role": "admin"}).json()
     res = client.put(f"/api/auth/users/{extra['id']}", json={"role": "manager"})
     assert res.status_code == 200 and res.json()["role"] == "manager"
     client.delete(f"/api/auth/users/{extra['id']}")
@@ -450,7 +467,7 @@ def test_admin_can_be_demoted_to_manager_when_not_last():
 
 def test_user_position_field():
     created = client.post("/api/auth/users", json={
-        "username": "posuser", "password": "pw1234", "email": "pos@x.com",
+        "username": "posuser", "password": "qa-pass-12", "email": "pos@x.com",
         "full_name": "Pos User", "role": "viewer", "position": "Account Manager"})
     assert created.status_code == 201 and created.json()["position"] == "Account Manager"
     upd = client.put(f"/api/auth/users/{created.json()['id']}", json={"position": "Creative Lead"})
@@ -537,17 +554,17 @@ def test_optimistic_locking_conflict():
 
 
 def test_token_revocation_on_logout():
-    client.post("/api/auth/users", json={"username": "revoke_me", "password": "pw1234", "role": "viewer"})
-    tok = client.post("/api/auth/login", json={"username": "revoke_me", "password": "pw1234"}).json()["token"]
+    client.post("/api/auth/users", json={"username": "revoke_me", "password": "qa-pass-12", "role": "viewer"})
+    tok = client.post("/api/auth/login", json={"username": "revoke_me", "password": "qa-pass-12"}).json()["token"]
     H = {"Authorization": f"Bearer {tok}"}
     assert client.get("/api/auth/me", headers=H).status_code == 200
     assert client.post("/api/auth/logout", headers=H).status_code == 204
     assert client.get("/api/auth/me", headers=H).status_code == 401   # old token revoked
     # a fresh login still works
-    tok2 = client.post("/api/auth/login", json={"username": "revoke_me", "password": "pw1234"}).json()["token"]
+    tok2 = client.post("/api/auth/login", json={"username": "revoke_me", "password": "qa-pass-12"}).json()["token"]
     assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok2}"}).status_code == 200
     # password change also revokes outstanding tokens
-    assert client.put("/api/auth/password", json={"current_password": "pw1234", "new_password": "pw5678"},
+    assert client.put("/api/auth/password", json={"current_password": "qa-pass-12", "new_password": "qa-pass-34"},
                       headers={"Authorization": f"Bearer {tok2}"}).status_code == 204
     assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok2}"}).status_code == 401
     uid = next(u["id"] for u in client.get("/api/auth/users").json() if u["username"] == "revoke_me")
@@ -561,7 +578,7 @@ def test_audit_trail_coverage():
     assert any(a["entity"] == "auth" and a["action"] == "login" for a in acts)
     assert all(("actor_id" in a and "entity" in a) for a in acts)
     # A user role change records before/after in `detail`.
-    u = client.post("/api/auth/users", json={"username": "audit_u", "password": "pw1234", "role": "viewer"}).json()
+    u = client.post("/api/auth/users", json={"username": "audit_u", "password": "qa-pass-12", "role": "viewer"}).json()
     client.put(f"/api/auth/users/{u['id']}", json={"role": "manager"})
     acts = client.get("/api/stats/activity?limit=50").json()
     role_change = next(a for a in acts if a["entity"] == "user" and a.get("detail") and a["detail"].get("role"))

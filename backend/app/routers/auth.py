@@ -12,13 +12,15 @@ from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..directory_models import Member, member_role_for, user_role_for
-from ..ratelimit import allow
+from ..ratelimit import allow, clear_failures, failure_count, register_failure
 from ..security import create_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 LOGIN_LIMIT = 10            # attempts ...
 LOGIN_WINDOW_SECONDS = 300  # ... per 5 minutes per IP
+LOCKOUT_THRESHOLD = 5       # failed logins ...
+LOCKOUT_WINDOW = 900        # ... per 15 minutes locks that username (anti credential-stuffing)
 
 GOOGLE_TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
@@ -99,9 +101,14 @@ def login(data: schemas.LoginRequest, request: Request, db: Session = Depends(ge
     client_ip = request.client.host if request.client else "unknown"
     if not allow(f"login:{client_ip}", limit=LOGIN_LIMIT, window_seconds=LOGIN_WINDOW_SECONDS):
         raise HTTPException(429, "พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่")
+    acct = f"acct:{data.username.strip().lower()}"
+    if failure_count(acct, window_seconds=LOCKOUT_WINDOW) >= LOCKOUT_THRESHOLD:
+        raise HTTPException(429, "บัญชีนี้ถูกล็อกชั่วคราวจากการพยายามเข้าสู่ระบบผิดหลายครั้ง — รอสักครู่แล้วลองใหม่")
     user = db.query(models.User).filter(models.User.username == data.username).first()
     if not user or not verify_password(data.password, user.password_hash):
+        register_failure(acct, window_seconds=LOCKOUT_WINDOW)
         raise HTTPException(401, "Invalid username or password")
+    clear_failures(acct)   # successful login resets the lockout counter
     token = create_token(username=user.username, role=user.role, token_version=user.token_version or 0)
     audit.record(db, entity="auth", action="login", user=user, summary="เข้าสู่ระบบ")
     db.commit()

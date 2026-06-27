@@ -892,7 +892,7 @@
         <p class="text-[14px] text-on-surface-variant mb-md">${esc(auth.user.full_name || auth.user.username)} · @${esc(auth.user.username)} · ${auth.user.role === "admin" ? "ผู้ดูแล (Admin)" : auth.user.role === "manager" ? "ผู้จัดการ (Manager)" : "ผู้ชม (Viewer)"}</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-sm">
           ${pwInput("pw-cur", "รหัสผ่านปัจจุบัน")}
-          ${pwInput("pw-new", "รหัสผ่านใหม่ (≥ 4 ตัว)")}
+          ${pwInput("pw-new", "รหัสผ่านใหม่ (≥ 8 ตัว)")}
           ${pwInput("pw-confirm", "ยืนยันรหัสผ่านใหม่")}
         </div>
         <button id="pw-save" class="mt-md bg-primary text-on-primary font-semibold rounded-lg py-2 px-md hover:bg-primary-container shadow-sm flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">key</span>เปลี่ยนรหัสผ่าน</button>
@@ -902,7 +902,7 @@
       const current_password = acct.querySelector("#pw-cur").value;
       const new_password = acct.querySelector("#pw-new").value;
       const confirm = acct.querySelector("#pw-confirm").value;
-      if (new_password.length < 4) return toast("รหัสผ่านใหม่สั้นเกินไป (อย่างน้อย 4 ตัว)", "err");
+      if (new_password.length < 8) return toast("รหัสผ่านใหม่สั้นเกินไป (อย่างน้อย 8 ตัว)", "err");
       if (new_password !== confirm) return toast("ยืนยันรหัสผ่านไม่ตรงกัน", "err");
       try {
         await api("/auth/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current_password, new_password }) });
@@ -1068,7 +1068,7 @@
             <label class="flex flex-col gap-1">${lbl("องค์กร / บริษัท (Organization)")}<input id="u-org" value="${esc(u.organization || "")}" placeholder="เช่น Wakuwaku, MOLLE" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("ตำแหน่งงาน (Position)")}<input id="u-position" value="${esc(u.position || "")}" placeholder="เช่น Account Manager, Creative Lead" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("โน้ต (Note)")}<input id="u-note" value="${esc(u.note || "")}" placeholder="บันทึกย่อ (ไม่บังคับ)" class="${inpCls}"/></label>
-            <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 4 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
+            <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 8 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
             <label class="flex flex-col gap-1">${lbl("ยืนยันรหัสผ่าน")}${pwInput("u-pass2", "พิมพ์รหัสผ่านอีกครั้ง")}</label>
           </div>
           <div class="px-lg py-md border-t border-outline-variant flex justify-end gap-md">
@@ -1089,7 +1089,7 @@
       const pass = modal.querySelector("#u-pass").value;
       const pass2 = modal.querySelector("#u-pass2").value;
       if (pass || pass2) {
-        if (pass.length < 4) return toast("รหัสผ่านสั้นเกินไป (อย่างน้อย 4 ตัว)", "err");
+        if (pass.length < 8) return toast("รหัสผ่านสั้นเกินไป (อย่างน้อย 8 ตัว)", "err");
         if (pass !== pass2) return toast("ยืนยันรหัสผ่านไม่ตรงกัน", "err");
       }
       try {

@@ -285,9 +285,28 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+# Reject obviously-weak / default passwords (length is enforced separately).
+_COMMON_PASSWORDS = {
+    "password", "password1", "passw0rd", "12345678", "123456789", "1234567890",
+    "qwerty123", "admin123", "administrator", "letmein1", "welcome1", "iloveyou",
+    "viewer123", "changeme", "secret12", "abc12345", "00000000", "11111111",
+    "creatorhub", "wakuwaku", "qwertyui",
+}
+
+
+def validate_password_strength(pw: str) -> str:
+    if len(pw) < 8:
+        raise ValueError("รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร")
+    if pw.lower() in _COMMON_PASSWORDS:
+        raise ValueError("รหัสผ่านนี้ง่ายเกินไป (อยู่ในรายการที่พบบ่อย) — กรุณาตั้งใหม่")
+    if len(set(pw)) == 1:
+        raise ValueError("รหัสผ่านต้องไม่ใช่ตัวอักษรเดียวซ้ำกัน")
+    return pw
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=80)
-    password: str = Field(..., min_length=4, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
     email: str = ""
     full_name: str = ""
     role: str = "viewer"
@@ -302,10 +321,20 @@ class UserCreate(BaseModel):
             raise ValueError("Role must be 'admin', 'manager' or 'viewer'")
         return value
 
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
 
 class PasswordChange(BaseModel):
     current_password: str | None = None     # required when changing your own
-    new_password: str = Field(..., min_length=4, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 
 class UserUpdate(BaseModel):
