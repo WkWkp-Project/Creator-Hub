@@ -1,5 +1,5 @@
 """Creator Hub — FastAPI application entrypoint."""
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
@@ -7,9 +7,16 @@ import os
 from .config import get_settings
 from .database import Base, engine
 from .migrate import run_migrations
+from .observability import (
+    RequestContextMiddleware, configure_logging, db_ready, init_sentry, log,
+)
 from .routers import auth, backup, campaigns, content, content_asset, directory, imports, influencers, stats, uploads
 
 settings = get_settings()
+
+# Observability: structured JSON logs + optional Sentry, set up before anything else.
+configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
+init_sentry(os.environ.get("SENTRY_DSN", ""), settings.environment)
 
 # --- Production safety guards -------------------------------------------------
 # Fail fast on insecure configuration when ENVIRONMENT=production so a misconfig
@@ -33,13 +40,16 @@ if settings.is_production:
         )
 elif settings.using_default_secret:
     # Dev convenience, but make the risk visible in logs.
-    print("[WARN] Using the default development SECRET_KEY — do NOT use in production.")
+    log.warning("Using the default development SECRET_KEY — do NOT use in production.")
 
 # Bring the schema to head via Alembic (creates a fresh DB, stamps a legacy one,
 # or applies new revisions to an already-managed DB).
 run_migrations(engine)
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+# Request-id + structured access logging (added after CORS so it wraps it).
+app.add_middleware(RequestContextMiddleware)
 
 # Auth uses bearer tokens (not cookies), so credentials need not be allowed —
 # this keeps a wildcard origin valid for local dev while staying safe.
@@ -65,7 +75,18 @@ app.include_router(directory.router)
 
 @app.get("/api/health", tags=["meta"])
 def health():
+    """Liveness — the process is up (does not touch the DB)."""
     return {"status": "ok", "service": settings.app_name, "version": settings.app_version}
+
+
+@app.get("/api/ready", tags=["meta"])
+def ready(response: Response):
+    """Readiness — the process can actually serve (DB reachable). 503 if not, so a
+    load balancer stops routing to a broken instance."""
+    if db_ready(engine):
+        return {"status": "ready", "database": "ok"}
+    response.status_code = 503
+    return {"status": "not_ready", "database": "unavailable"}
 
 
 # Serve user-uploaded media (avatars + campaign media).

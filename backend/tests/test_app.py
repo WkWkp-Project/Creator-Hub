@@ -556,6 +556,17 @@ def test_unsafe_url_neutralised_on_save():
     client.delete(f"/api/assets/{a['id']}")
 
 
+def test_readiness_and_request_id():
+    r = client.get("/api/ready")
+    assert r.status_code == 200 and r.json()["database"] == "ok"
+    assert client.get("/api/health").status_code == 200
+    # every response carries a correlation id
+    assert client.get("/api/health").headers.get("X-Request-ID")
+    # a caller-supplied id is propagated back
+    rid = "test-rid-123"
+    assert client.get("/api/health", headers={"X-Request-ID": rid}).headers.get("X-Request-ID") == rid
+
+
 def test_production_config_flags():
     from app.config import Settings, DEFAULT_SECRET
     insecure = Settings(environment="production", secret_key=DEFAULT_SECRET, _env_file=None)

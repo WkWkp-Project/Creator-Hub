@@ -11,6 +11,7 @@ uvicorn[standard]>=0.32.1
 # ── Data layer (ORM + validation) ────────────────────────────────────────────
 sqlalchemy>=2.0.36
 alembic>=1.13           # database migrations (replaces the hand-rolled migrate.py)
+# sentry-sdk>=2.0       # optional: error tracking, enabled only when SENTRY_DSN is set
 pydantic>=2.10.3
 pydantic-settings>=2.6.1
 
