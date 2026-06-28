@@ -587,6 +587,23 @@ def test_audit_trail_coverage():
     client.delete(f"/api/auth/users/{u['id']}")
 
 
+def test_list_pagination_and_brand_filter():
+    brand = client.post("/api/brands", json={"name": "PageBrand"}).json()
+    ids = [client.post("/api/assets", json={"campaign_name": f"PG{i}", "drive_folder_url": "x",
+                                            "brand_id": brand["id"]}).json()["id"] for i in range(3)]
+    # brand_id filter is server-side and accurate
+    r = client.get(f"/api/assets?brand_id={brand['id']}").json()
+    assert r["total"] == 3 and all(a["brand_id"] == brand["id"] for a in r["items"])
+    # pagination: a page returns only `limit`, total reflects the full set, pages don't overlap
+    p1 = client.get(f"/api/assets?brand_id={brand['id']}&skip=0&limit=2").json()
+    p2 = client.get(f"/api/assets?brand_id={brand['id']}&skip=2&limit=2").json()
+    assert len(p1["items"]) == 2 and p1["total"] == 3 and len(p2["items"]) == 1
+    assert {a["id"] for a in p1["items"]}.isdisjoint({a["id"] for a in p2["items"]})
+    for i in ids:
+        client.delete(f"/api/assets/{i}")
+    client.delete(f"/api/brands/{brand['id']}")
+
+
 def test_internal_endpoints_are_admin_only():
     # A viewer (external customer) must NOT read org-wide budgets/financials or backups.
     assert client.get("/api/stats/campaign-budgets", headers=VIEWER).status_code == 403

@@ -149,7 +149,6 @@
   // ============================================================ LIST ROUTE ===
   route("assets", async (view) => {
     await loadDirectory();
-    const data = await api("/assets");
     const wrap = el(`<div class="ca-root">
       <div class="ca-headrow">
         <h1 class="ca-title">Campaigns</h1>
@@ -160,6 +159,7 @@
       </div>
       <div class="ca-tabs" id="ca-tabs"></div>
       <div id="ca-groups"></div>
+      <div id="ca-pager" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:12px"></div>
     </div>`);
     view.appendChild(wrap);
 
@@ -215,28 +215,25 @@
 
     const groupsHost = wrap.querySelector("#ca-groups");
     const tabsHost = wrap.querySelector("#ca-tabs");
+    const pagerHost = wrap.querySelector("#ca-pager");
+    const PAGE = 24;
+    let skip = 0, activeBrand = "all";
+    const sortedBrands = [...brands].sort((x, y) => x.name.localeCompare(y.name));
 
-    // group by brand (brands in name order, then "No brand")
-    const byBrand = new Map();
-    data.items.forEach((a) => {
-      const key = a.brand_id || 0;
-      if (!byBrand.has(key)) byBrand.set(key, []);
-      byBrand.get(key).push(a);
-    });
-    const orderedBrandIds = [...brands].sort((x, y) => x.name.localeCompare(y.name)).map((b) => b.id).filter((id) => byBrand.has(id));
-    // append any remaining groups (no-brand + ids whose brand was deleted) so nothing is dropped
-    [...byBrand.keys()].forEach((k) => { if (!orderedBrandIds.includes(k)) orderedBrandIds.push(k); });
-
-    const renderGroups = (filterId) => {
+    // group the CURRENT PAGE's items by brand (server already paginated/filtered)
+    const renderGroupsFor = (items) => {
       groupsHost.innerHTML = "";
-      if (!data.items.length) { groupsHost.innerHTML = `<div style="color:#8a8a8f">ยังไม่มีแคมเปญ</div>`; return; }
-      const ids = filterId === "all" ? orderedBrandIds : orderedBrandIds.filter((id) => String(id) === String(filterId));
+      if (!items.length) { groupsHost.innerHTML = `<div style="color:#8a8a8f;padding:8px 0">ไม่มีแคมเปญ</div>`; return; }
+      const byBrand = new Map();
+      items.forEach((a) => { const k = a.brand_id || 0; if (!byBrand.has(k)) byBrand.set(k, []); byBrand.get(k).push(a); });
+      const ids = sortedBrands.map((b) => b.id).filter((id) => byBrand.has(id));
+      [...byBrand.keys()].forEach((k) => { if (!ids.includes(k)) ids.push(k); });
       ids.forEach((bid) => {
         const heading = (bid && brandName(bid)) ? esc(brandName(bid)) : "No brand";
         const logo = bid && brandLogo(bid);
         const isBrand = !!(bid && brandName(bid));
         const grp = el(`<div style="margin-bottom:28px">
-          <div class="ca-sechead" style="margin:0 0 14px">${logo ? `<img class="ca-brand-logo" src="${esc(mediaSrc(logo))}" alt=""/>` : ""}<span class="ca-sectitle" style="font-size:20px">${heading}</span><span class="ca-linkcount">${byBrand.get(bid).length} CAMPAIGN${byBrand.get(bid).length > 1 ? "S" : ""}</span>${isBrand ? `<a data-brand style="margin-left:14px;font-size:12px;color:#e1121c;font-weight:600;cursor:pointer">ดูแบรนด์ →</a>` : ""}</div>
+          <div class="ca-sechead" style="margin:0 0 14px">${logo ? `<img class="ca-brand-logo" src="${esc(mediaSrc(logo))}" alt=""/>` : ""}<span class="ca-sectitle" style="font-size:20px">${heading}</span><span class="ca-linkcount">${byBrand.get(bid).length}</span>${isBrand ? `<a data-brand style="margin-left:14px;font-size:12px;color:#e1121c;font-weight:600;cursor:pointer">ดูแบรนด์ →</a>` : ""}</div>
           <div class="ca-cards"></div></div>`);
         grp.querySelector("[data-brand]")?.addEventListener("click", () => (location.hash = "#/brand/" + bid));
         const cards = grp.querySelector(".ca-cards");
@@ -245,20 +242,30 @@
       });
     };
 
-    // brand tabs ("ทั้งหมด" + one per brand)
-    const tabDefs = [{ id: "all", name: "ทั้งหมด", logo: "", count: data.items.length }].concat(
-      orderedBrandIds.map((bid) => ({ id: String(bid), name: (bid && brandName(bid)) || "No brand", logo: bid && brandLogo(bid), count: byBrand.get(bid).length }))
-    );
-    let activeTab = "all";
+    const renderPage = async () => {
+      groupsHost.innerHTML = `<div style="color:#8a8a8f;padding:8px 0">กำลังโหลด…</div>`;
+      const q = `/assets?skip=${skip}&limit=${PAGE}` + (activeBrand !== "all" ? `&brand_id=${activeBrand}` : "");
+      let data;
+      try { data = await api(q); } catch (e) { groupsHost.innerHTML = `<div class="text-error p-md">${esc(e.message)}</div>`; return; }
+      const items = data.items || [], total = data.total || 0;
+      renderGroupsFor(items);
+      const from = total ? skip + 1 : 0, to = skip + items.length;
+      pagerHost.innerHTML = `<span style="color:#8a8a8f;font-size:13px">แสดง ${from}–${to} จาก ${total} แคมเปญ</span>
+        <div style="display:flex;gap:8px">
+          <button class="ca-btn" data-prev ${skip <= 0 ? "disabled" : ""}>← ก่อนหน้า</button>
+          <button class="ca-btn" data-next ${to >= total ? "disabled" : ""}>ถัดไป →</button>
+        </div>`;
+      pagerHost.querySelector("[data-prev]")?.addEventListener("click", () => { skip = Math.max(0, skip - PAGE); renderPage(); window.scrollTo(0, 0); });
+      pagerHost.querySelector("[data-next]")?.addEventListener("click", () => { skip += PAGE; renderPage(); window.scrollTo(0, 0); });
+    };
+
     const filterBar = el(`<div class="ca-filter">
       <span class="ca-filter-label"><span class="material-symbols-outlined text-[18px]">sell</span>แบรนด์</span>
-      <select class="ca-brand-select">${tabDefs.map((t) => `<option value="${t.id}">${esc(t.name)} (${t.count})</option>`).join("")}</select>
+      <select class="ca-brand-select"><option value="all">ทั้งหมด</option>${sortedBrands.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select>
     </div>`);
-    const sel = filterBar.querySelector("select");
-    sel.value = activeTab;
-    sel.addEventListener("change", () => { activeTab = sel.value; renderGroups(activeTab); });
+    filterBar.querySelector("select").addEventListener("change", (e) => { activeBrand = e.target.value; skip = 0; renderPage(); });
     tabsHost.appendChild(filterBar);
-    renderGroups(activeTab);
+    await renderPage();
     wrap.querySelector("[data-new]")?.addEventListener("click", () => openAddModal());
     wrap.querySelector("[data-brands]")?.addEventListener("click", () => openBrandsModal());
   });
@@ -268,8 +275,8 @@
     await loadDirectory();
     const bid = Number(id);
     const b = brands.find((x) => x.id === bid);
-    const data = await api("/assets");
-    const camps = data.items.filter((a) => a.brand_id === bid);
+    const data = await api("/assets?brand_id=" + bid + "&limit=500");
+    const camps = data.items;
     const num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
     const budget = (a) => (a.kols || []).reduce((s, k) => s + num(k.rate) + num(k.gen_code_price) + num(k.boosting_cost), 0);
     const money = (n) => "฿" + Math.round(n).toLocaleString("en-US");

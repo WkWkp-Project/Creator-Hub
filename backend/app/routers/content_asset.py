@@ -110,6 +110,7 @@ def list_assets(
     search: str | None = None,
     owner_email: str | None = None,
     status: str | None = None,
+    brand_id: int | None = None,
     skip: int = 0,
     limit: int = Query(200, le=500),
     user: models.User = Depends(get_current_user),
@@ -121,6 +122,8 @@ def list_assets(
         stmt = stmt.where(or_(ContentAsset.campaign_name.ilike(like), ContentAsset.client_name.ilike(like)))
     if owner_email:
         stmt = stmt.where(ContentAsset.owner_email == owner_email)
+    if brand_id is not None:
+        stmt = stmt.where(ContentAsset.brand_id == brand_id)
     if status and status.lower() not in {"all", ""}:
         stmt = stmt.where(ContentAsset.status == status.lower())
     stmt = stmt.order_by(ContentAsset.updated_at.desc())
