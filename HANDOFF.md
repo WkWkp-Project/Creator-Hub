@@ -22,9 +22,10 @@
   ```
 - **ล็อกอินทดลอง:** `admin / admin123` (แอดมิน) · `viewer / viewer123` (ดูอย่างเดียว). Google login: อีเมลโดเมน wkwkp → แอดมินอัตโนมัติ.
 
-> ⚠️ **2 กฎทองตอนแก้โค้ด**
+> ⚠️ **3 กฎทองตอนแก้โค้ด**
 > 1. **แก้ไฟล์ `frontend/assets/*` ต้องเพิ่มเลข `?v=N`** ของไฟล์นั้นใน [`frontend/index.html`](frontend/index.html) (กัน browser cache) มิฉะนั้นจะไม่เห็นผล.
 > 2. **Backend ไม่มี `--reload`** → แก้ไฟล์ `.py` แล้วต้อง **stop + start** preview server ใหม่ถึงจะโหลด.
+> 3. **ถ้าเพิ่ม/แก้ Tailwind class** ต้อง rebuild CSS: `cd frontend && npm install && npm run build` → สร้าง `assets/tailwind.css` (purged+minified, ไม่ใช้ CDN แล้ว). class ใหม่ที่ไม่ rebuild จะไม่มี style. config สี/token อยู่ที่ [`frontend/tailwind.config.js`](frontend/tailwind.config.js).
 
 ## 3. สถาปัตยกรรม (5 ข้อ)
 - **Backend:** FastAPI + SQLAlchemy 2.0 + Pydantic v2. ทุก route ขึ้นต้น `/api`.
