@@ -43,8 +43,10 @@ WORKDIR /app
 # Bring in the prebuilt virtualenv — no pip cache or build tooling in the runtime.
 COPY --from=builder /opt/venv /opt/venv
 
-# Application code + baked frontend.
+# Application code + baked frontend + Alembic migrations used at startup.
 COPY backend/app ./app
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./alembic.ini
 COPY frontend ./frontend
 
 # Drop root: run as an unprivileged user and pre-create the writable dirs
