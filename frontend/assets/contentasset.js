@@ -335,6 +335,8 @@
           ${canEdit ? `<div class="ca-hero-actions">
             <button class="ca-btn" data-edit><span class="material-symbols-outlined text-[18px]">edit</span>Edit Info</button>
             <button class="ca-btn" data-export><span class="material-symbols-outlined text-[18px]">download</span>Export</button>
+            <button class="ca-btn" data-backup><span class="material-symbols-outlined text-[18px]">save</span>Backup .json</button>
+            <button class="ca-btn" data-restore><span class="material-symbols-outlined text-[18px]">upload_file</span>Restore .json</button>
             <button class="ca-btn ca-btn-gold" data-handoff><span class="material-symbols-outlined text-[18px]">hexagon</span>Prepare Handoff</button>
           </div>` : ""}
         </div>
@@ -350,6 +352,60 @@
       const t = CH.token ? "&token=" + encodeURIComponent(CH.token) : "";
       window.open((window.API_BASE || "") + "/api/assets/" + a.id + "/export?format=xlsx" + t, "_blank");
       toast("กำลัง export แผน KOL/งบ…");
+    });
+
+    // ---- Phase 1: per-campaign JSON backup / restore (download file + import back) ----
+    // Full campaign data → a portable .json the client can keep in their Drive,
+    // and load back to view/restore. Source of truth stays in Postgres.
+    const RESTORE_FIELDS = ["owner_email", "owner_name", "client_name", "campaign_name", "brand_id",
+      "responsible_member_id", "responsible_member_ids", "period_start", "period_end", "status",
+      "tags", "description", "stakeholders", "drive_folder_url", "input_files", "influencer_ids",
+      "assigned_user_ids", "budget_show", "kols", "sow_options"];
+    const dlFile = (content, type, name) => {
+      const url = URL.createObjectURL(new Blob([content], { type }));
+      const link = document.createElement("a"); link.href = url; link.download = name; link.click();
+      URL.revokeObjectURL(url);
+    };
+    const slug = (s) => (s || "campaign").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "campaign";
+    wrap.querySelector("[data-backup]")?.addEventListener("click", () => {
+      const data = {};
+      RESTORE_FIELDS.forEach((k) => { data[k] = a[k]; });
+      const payload = {
+        _type: "creatorhub.campaign", version: 1, asset_id: a.id,
+        campaign_name: a.campaign_name, exported_at: new Date().toISOString(), data,
+      };
+      dlFile(JSON.stringify(payload, null, 2), "application/json", slug(a.campaign_name) + "-campaign-data.json");
+      toast("ดาวน์โหลด campaign-data.json แล้ว ✓ (เก็บไว้ใน Drive ลูกค้าได้เลย)");
+    });
+    wrap.querySelector("[data-restore]")?.addEventListener("click", () => {
+      const inp = document.createElement("input");
+      inp.type = "file"; inp.accept = "application/json,.json";
+      inp.addEventListener("change", async () => {
+        const file = inp.files && inp.files[0];
+        if (!file) return;
+        let payload;
+        try { payload = JSON.parse(await file.text()); }
+        catch (_) { return toast("ไฟล์ไม่ใช่ JSON ที่ถูกต้อง", "err"); }
+        if (!payload || payload._type !== "creatorhub.campaign" || !payload.data)
+          return toast("ไฟล์นี้ไม่ใช่ไฟล์ backup ของแคมเปญ", "err");
+        const d = payload.data;
+        const when = (payload.exported_at || "").slice(0, 16).replace("T", " ");
+        const diff = payload.asset_id && payload.asset_id !== a.id;
+        const ok = confirm(
+          "กู้คืนจากไฟล์นี้เข้าแคมเปญปัจจุบัน?\n\n" +
+          "• ไฟล์: " + (payload.campaign_name || "—") + "\n" +
+          "• export เมื่อ: " + (when || "—") + "\n" +
+          "• " + (d.kols || []).length + " KOL · " + (d.input_files || []).length + " ไฟล์\n\n" +
+          (diff ? "⚠️ ไฟล์นี้มาจากแคมเปญอื่น (id " + payload.asset_id + ") ไม่ตรงกับแคมปัจจุบัน (id " + a.id + ")\n\n" : "") +
+          "ข้อมูลปัจจุบันจะถูกแทนที่ (มี version log ให้ย้อนกลับได้)"
+        );
+        if (!ok) return;
+        const patch = {};
+        RESTORE_FIELDS.forEach((k) => { if (k in d) patch[k] = d[k]; });
+        try { await CA.saveAsset(a.id, patch, a); toast("กู้คืนข้อมูลแล้ว ✓"); render(); }
+        catch (e) { toast(e.message || "กู้คืนไม่สำเร็จ", "err"); }
+      });
+      inp.click();
     });
 
     // Render each registered section: a consistent header (letter + title + count
