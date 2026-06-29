@@ -27,7 +27,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('key')
     )
     with op.batch_alter_table('users', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('directory_access', sa.Boolean(), server_default=sa.text('0'), nullable=False))
+        batch_op.add_column(sa.Column('directory_access', sa.Boolean(), server_default=sa.false(), nullable=False))
 
     # ### end Alembic commands ###
 

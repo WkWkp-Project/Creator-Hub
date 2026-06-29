@@ -7,7 +7,7 @@ scope of work and past campaign history.
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON, text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -117,7 +117,7 @@ class User(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     # Per-user grant to view the influencer Directory. Admins always can; a
     # non-admin (manager/viewer) sees the Directory only when this is true.
-    directory_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    directory_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
