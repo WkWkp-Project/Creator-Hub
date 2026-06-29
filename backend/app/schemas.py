@@ -278,6 +278,7 @@ class UserOut(BaseModel):
     organization: str = ""
     position: str = ""
     note: str = ""
+    directory_access: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -313,6 +314,7 @@ class UserCreate(BaseModel):
     organization: str = ""
     position: str = ""
     note: str = ""
+    directory_access: bool = False
 
     @field_validator("role")
     @classmethod
@@ -344,6 +346,7 @@ class UserUpdate(BaseModel):
     organization: str | None = None
     position: str | None = None
     note: str | None = None
+    directory_access: bool | None = None
 
     @field_validator("role")
     @classmethod

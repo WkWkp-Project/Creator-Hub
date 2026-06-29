@@ -267,7 +267,16 @@
     Object.entries(priceBounds(filterState.price)).forEach(([k, v]) => p.set(k, v));
     p.set("limit", "60");
 
-    const data = await api("/influencers?" + p.toString());
+    let data;
+    try {
+      data = await api("/influencers?" + p.toString());
+    } catch (e) {
+      grid.innerHTML = "";
+      grid.appendChild(el(e.status === 403
+        ? `<div class="col-span-full text-center py-3xl text-on-surface-variant"><span class="material-symbols-outlined text-[48px] opacity-40">lock</span><p class="mt-sm font-semibold text-[16px]">คุณไม่มีสิทธิ์ดู Directory</p><p class="text-[13px]">ติดต่อแอดมินเพื่อขอเปิดสิทธิ์การเข้าถึง</p></div>`
+        : `<div class="col-span-full text-error p-lg">${esc(e.message)}</div>`));
+      return;
+    }
     grid.innerHTML = "";
     if (!data.items.length) {
       grid.appendChild(el(`<div class="col-span-full text-center py-3xl text-on-surface-variant">
@@ -416,7 +425,10 @@
     const feeRow = (label, val) => `
       <div class="flex justify-between items-center py-3 border-b border-outline-variant">
         <span class="text-on-surface">${label}</span><span class="font-semibold text-[18px]">${fmtMoney(val, ccy)}</span></div>`;
-    midRow.appendChild(el(`
+    if (inf.base_rate === undefined && inf.total_fee === undefined) {
+      // Money fields were redacted server-side for this viewer.
+      midRow.appendChild(el(`<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg flex items-center gap-md text-on-surface-variant"><span class="material-symbols-outlined opacity-60">lock</span><div><div class="font-semibold text-on-surface">Financial Breakdown</div><div class="text-[13px]">คุณไม่มีสิทธิ์ดูข้อมูลการเงินของอินฟลูเอนเซอร์</div></div></div>`));
+    } else midRow.appendChild(el(`
       <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
         <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center">
           <h3 class="text-[20px] font-semibold">Financial Breakdown</h3>
@@ -988,6 +1000,37 @@
       });
       await loadUsers();
 
+      // --- Directory access: which fields are hidden from non-admin viewers ---
+      const dirCard = el(`
+        <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
+          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center flex-wrap gap-sm">
+            <div><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">visibility_lock</span>Directory — ฟิลด์ที่ซ่อนจาก non-admin</h3>
+            <p class="text-[12px] text-on-surface-variant mt-0.5">ติ๊ก = ซ่อนฟิลด์นั้นจากผู้ใช้ที่ไม่ใช่ admin (บังคับฝั่งเซิร์ฟเวอร์ กัน API leak) · ส่วน "ใครดู Directory ได้" ตั้งรายคนในฟอร์มผู้ใช้ด้านบน</p></div>
+            <button id="dir-save" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">save</span>บันทึก</button>
+          </div>
+          <div class="p-lg" id="dir-fields"><div class="text-[13px] text-on-surface-variant">กำลังโหลด…</div></div>
+        </div>`);
+      view.appendChild(dirCard);
+      const dirFields = dirCard.querySelector("#dir-fields");
+      const DIR_GROUP_LABEL = { money: "💰 การเงิน (ค่าตัว/ค่าธรรมเนียม)", metrics: "📊 เมตริก", other: "อื่นๆ" };
+      const loadDirSettings = async () => {
+        try {
+          const s = await api("/settings/directory");
+          const byGroup = {};
+          s.catalog.forEach((f) => { (byGroup[f.group] = byGroup[f.group] || []).push(f); });
+          const hidden = new Set(s.hidden_fields);
+          dirFields.innerHTML = Object.entries(byGroup).map(([g, fs]) => `
+            <div class="mb-md"><div class="text-[12px] font-semibold text-on-surface-variant mb-sm">${DIR_GROUP_LABEL[g] || g}</div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">${fs.map((f) => `<label class="flex items-center gap-sm px-sm py-1.5 rounded hover:bg-surface-container-low cursor-pointer text-[14px]"><input type="checkbox" class="dir-f rounded text-primary focus:ring-primary" value="${esc(f.key)}" ${hidden.has(f.key) ? "checked" : ""}/><span>${esc(f.label)}</span></label>`).join("")}</div></div>`).join("");
+        } catch (e) { dirFields.innerHTML = `<div class="text-error text-[13px]">โหลดไม่สำเร็จ: ${esc(e.message)}</div>`; }
+      };
+      dirCard.querySelector("#dir-save").addEventListener("click", async () => {
+        const hidden_fields = [...dirCard.querySelectorAll(".dir-f:checked")].map((c) => c.value);
+        try { await api("/settings/directory", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden_fields }) }); toast("บันทึกการตั้งค่า Directory แล้ว ✓"); }
+        catch (e) { toast(e.message, "err"); }
+      });
+      await loadDirSettings();
+
       // --- Local Backup (safety net) ---
       const bk = el(`
         <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
@@ -1080,6 +1123,7 @@
             <label class="flex flex-col gap-1">${lbl("องค์กร / บริษัท (Organization)")}<input id="u-org" value="${esc(u.organization || "")}" placeholder="เช่น Wakuwaku, MOLLE" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("ตำแหน่งงาน (Position)")}<input id="u-position" value="${esc(u.position || "")}" placeholder="เช่น Account Manager, Creative Lead" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("โน้ต (Note)")}<input id="u-note" value="${esc(u.note || "")}" placeholder="บันทึกย่อ (ไม่บังคับ)" class="${inpCls}"/></label>
+            <label class="flex items-start gap-sm mt-1 p-sm rounded-lg bg-surface-container-low cursor-pointer"><input type="checkbox" id="u-diraccess" ${u.directory_access ? "checked" : ""} class="mt-1 rounded text-primary focus:ring-primary"/><span class="text-[13px]"><b>เปิดให้ดู Directory อินฟลูเอนเซอร์</b><br><span class="text-on-surface-variant text-[12px]">สำหรับ Manager/Viewer (Admin เห็นเสมอ) · ฟิลด์เงิน/sensitive ถูกซ่อนตามที่ตั้งค่าไว้ในหน้านี้</span></span></label>
             <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 8 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
             <label class="flex flex-col gap-1">${lbl("ยืนยันรหัสผ่าน")}${pwInput("u-pass2", "พิมพ์รหัสผ่านอีกครั้ง")}</label>
           </div>
@@ -1098,6 +1142,7 @@
       const organization = modal.querySelector("#u-org").value.trim();
       const position = modal.querySelector("#u-position").value.trim();
       const note = modal.querySelector("#u-note").value.trim();
+      const directory_access = modal.querySelector("#u-diraccess").checked;
       const pass = modal.querySelector("#u-pass").value;
       const pass2 = modal.querySelector("#u-pass2").value;
       if (pass || pass2) {
@@ -1106,13 +1151,13 @@
       }
       try {
         if (existing) {
-          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, email, role, organization, position, note }) });
+          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, email, role, organization, position, note, directory_access }) });
           if (pass) await api("/auth/users/" + existing.id + "/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_password: pass }) });
           toast("อัปเดตผู้ใช้แล้ว");
         } else {
           const username = modal.querySelector("#u-user").value.trim();
           if (!pass) return toast("กรุณาตั้งรหัสผ่าน", "err");
-          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, email, password: pass, role, organization, position, note }) });
+          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, email, password: pass, role, organization, position, note, directory_access }) });
           toast("เพิ่มผู้ใช้แล้ว");
         }
         close(); onDone && onDone();

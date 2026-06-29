@@ -10,7 +10,7 @@ from .migrate import run_migrations
 from .observability import (
     RequestContextMiddleware, configure_logging, db_ready, init_sentry, log,
 )
-from .routers import auth, backup, campaigns, content, content_asset, directory, imports, influencers, stats, uploads
+from .routers import auth, backup, campaigns, content, content_asset, directory, imports, influencers, settings as settings_router, stats, uploads
 
 settings = get_settings()
 
@@ -71,6 +71,7 @@ app.include_router(backup.router)
 app.include_router(content.router)
 app.include_router(content_asset.router)
 app.include_router(directory.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/api/health", tags=["meta"])

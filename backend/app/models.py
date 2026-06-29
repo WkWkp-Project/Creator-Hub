@@ -115,7 +115,19 @@ class User(Base):
     organization: Mapped[str] = mapped_column(String(160), default="")
     position: Mapped[str] = mapped_column(String(120), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    # Per-user grant to view the influencer Directory. Admins always can; a
+    # non-admin (manager/viewer) sees the Directory only when this is true.
+    directory_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """Tiny key→JSON store for global app settings (e.g. the Directory field
+    allowlist applied to all non-admin viewers)."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Campaign(Base):

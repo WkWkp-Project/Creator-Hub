@@ -244,6 +244,7 @@ def create_user(
         organization=data.organization,
         position=data.position,
         note=data.note,
+        directory_access=data.directory_access,
         password_hash=hash_password(data.password),
     )
     db.add(user)
