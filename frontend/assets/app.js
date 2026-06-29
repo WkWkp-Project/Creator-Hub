@@ -101,20 +101,28 @@
   }
 
   // ---------- influencer tiers (mirror backend services/tiers.py) ----------
-  const TIERS = ["Nano", "Micro", "Mega"];
+  const TIERS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
   function tierForFollowers(n) {
     n = Number(n) || 0;
     if (n >= 1_000_000) return "Mega";
+    if (n >= 100_000) return "Macro";
+    if (n >= 50_000) return "Mid-Tier";
     if (n >= 10_000) return "Micro";
     return "Nano";
   }
-  const TIER_ICON = { Nano: "eco", Micro: "trending_up", Mega: "stars" };
+  const TIER_ICON = { Nano: "eco", Micro: "trending_up", "Mid-Tier": "insights", Macro: "rocket_launch", Mega: "stars" };
   function tierChip(tier) {
     if (!tier) return "";
     const known = TIERS.includes(tier);
     const icon = TIER_ICON[tier] || "workspace_premium";
     return `<span class="tier-chip ${known ? `tier-${tier}` : "tier-custom"}"><span class="material-symbols-outlined text-[13px]">${icon}</span>${esc(tier)}</span>`;
   }
+  // Short readable date for "last updated" stamps (Gregorian — avoids Buddhist-era).
+  const fmtDate = (iso) => {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+    catch (_) { return "—"; }
+  };
   // Resolve an upload path / URL to something the browser can load.
   const mediaSrc = (url) => (url && url.startsWith("/uploads/") ? (window.API_BASE || "") + url : url);
 
@@ -208,7 +216,7 @@
           <p class="text-on-surface-variant mt-xs">Browse your verified network of top-performing influencers.</p>
         </div>
         <div class="md:col-span-7 flex flex-wrap gap-sm justify-end items-end">
-          ${filterSelect("tier","Tier",["All Tiers","Nano","Micro","Mega"])}
+          ${filterSelect("tier","Tier",["All Tiers","Nano","Micro","Mid-Tier","Macro","Mega"])}
           ${filterSelect("platform","Platform",["All Platforms","Instagram","TikTok","YouTube"])}
           ${filterSelect("niche","Niche",["Any Niche","Beauty","Tech","Lifestyle","Fitness","Food","Travel","Art"])}
           ${filterSelect("price","Price Range (฿)",["Any Price","< ฿50k","฿50k - ฿150k","฿150k - ฿300k","> ฿300k"])}
@@ -303,6 +311,9 @@
               <span class="text-[20px] font-bold text-primary">${(inf.engagement_rate || 0).toFixed(1)}%</span>
             </div>
           </div>
+          <div class="mt-sm text-[11px] text-on-surface-variant flex items-center gap-1" title="วันที่อัปเดตข้อมูลล่าสุด (เช่น จำนวนผู้ติดตาม)">
+            <span class="material-symbols-outlined text-[13px]">update</span>อัปเดต ${fmtDate(inf.updated_at)}
+          </div>
         </div>
       </article>`);
     c.addEventListener("click", () => (location.hash = `#/influencer/${inf.id}`));
@@ -338,6 +349,7 @@
             </div>
           </div>
           ${inf.location || inf.handle ? `<p class="text-[14px] text-on-surface-variant mt-1">${esc(inf.handle || "")}${inf.location ? " · " + esc(inf.location) : ""}${inf.active_since ? " · active since " + esc(inf.active_since) : ""}</p>` : ""}
+          <p class="text-[12px] text-on-surface-variant mt-1 flex items-center gap-1" title="วันที่อัปเดตข้อมูลล่าสุด"><span class="material-symbols-outlined text-[14px]">update</span>อัปเดตข้อมูลล่าสุด ${fmtDate(inf.updated_at)}</p>
           ${Object.keys(inf.social_links || {}).length ? `<div class="mt-sm">${socialIcons(inf.social_links, 36)}</div>` : ""}
           <p class="text-on-surface-variant mt-sm leading-relaxed">${esc(inf.bio || "No bio provided.")}</p>
           <div class="flex gap-sm mt-md" data-admin-only>

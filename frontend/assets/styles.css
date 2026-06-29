@@ -361,6 +361,8 @@ body.is-viewer [data-admin-only]{ display:none !important; }
   font-size:11px;line-height:1;padding:4px 8px;border-radius:9999px;white-space:nowrap; }
 .tier-Nano{ background:#e7eefe;color:#0058be; }
 .tier-Micro{ background:#fff0d6;color:#9a6700; }
+.tier-Mid-Tier{ background:#d9f2e6;color:#0f7a52; }
+.tier-Macro{ background:#ffe3cc;color:#b5530a; }
 .tier-Mega{ background:#ffd9e2;color:#b90538; }
 .tier-custom{ background:#ececf0;color:#3f3f46; }   /* hand-entered, non-standard tier */
 
