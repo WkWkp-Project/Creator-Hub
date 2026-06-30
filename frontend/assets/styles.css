@@ -383,12 +383,13 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 /* Sidebar nav states */
 /* ===== Dark sidebar (charcoal + white text, Wakuwaku W mark) ===== */
 .app-sidebar{ background:#1a1a1d; border-right:1px solid #2e2e33; }
-.sb-brand{ display:flex; align-items:center; gap:12px; margin-bottom:28px; padding:2px 4px; }
+.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:28px; padding:2px 4px; }
+.sb-brand-logo{ width:100%; max-width:120px; height:auto; display:block; }
 .sb-logo{ width:42px; height:42px; flex-shrink:0; color:#fff; display:block; }
 .sb-logo svg{ width:100%; height:100%; display:block; }
 /* real logo image — inverted so the black mark shows white on the dark sidebar */
 .sb-logo-img{ width:100%; height:100%; object-fit:contain; display:block; filter:invert(1); }
-.sb-brand-name{ font-size:18px; font-weight:800; letter-spacing:.01em; color:#fff; line-height:1.1; white-space:nowrap; }
+.sb-brand-name{ font-size:18px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:#fff; line-height:1.1; white-space:nowrap; }
 .sb-brand-sub{ font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:#8a8a8f; font-weight:600; margin-top:2px; }
 .sb-btn{ width:100%; display:flex; align-items:center; justify-content:center; gap:8px; font-size:15px; font-weight:600;
   border-radius:10px; padding:10px 16px; cursor:pointer; transition:background-color .14s ease, border-color .14s ease, transform .05s ease; }
