@@ -25,6 +25,23 @@
     const OBJ = ["Awareness", "Engagement", "Conversion"];
     const ro = admin ? "" : "disabled";
 
+    // Budget columns. For the customer view a column shows only if at least one
+    // KOL has its eye open; if every value in it is hidden the whole column
+    // collapses away. Within a shown column, hidden cells stay hidden ("—").
+    // Admins/managers always see the full table + eye toggles.
+    const BUDGET_FIELDS = [
+      { f: "rate", th: "ค่าตัว" },
+      { f: "gen_code_price", th: "Gen Code" },
+      { f: "boosting_cost", th: "Boosting" },
+    ];
+    const bshow = a.budget_show || {};
+    const bvis = (f) => bshow[f] !== false;
+    const totalHidden = bshow.total === false;
+    const cellOpen = (k, f) => (k.show || {})[f] !== false;
+    const colOpen = (f) => kols.some((k) => cellOpen(k, f));
+    const colVis = (f) => admin || (!totalHidden && bvis(f) && colOpen(f));
+    const visBudget = BUDGET_FIELDS.filter((b) => colVis(b.f));
+
     if (!kols.length) {
       host.innerHTML = `<div class="kol-panel"><div class="kol-empty"><span class="material-symbols-outlined">groups</span><span>ยังไม่มี KOL ในแคมเปญนี้${admin ? ' — กด "Assign KOL" เพื่อเพิ่ม' : ""}</span></div></div>`;
       return;
@@ -85,9 +102,12 @@
         <td>${sel("client_approved", k.client_approved || "Pending", APPROVE)}</td>
         <td>${dt("post_date", k.post_date)}</td>
         <td>${linkCell(k.link)}</td>
-        <td><div class="kol-bcell">${num("rate", k.rate)}${eye("rate", show.rate !== false)}</div></td>
-        <td><div class="kol-bcell">${num("gen_code_price", k.gen_code_price)}${eye("gen_code_price", show.gen_code_price !== false)}</div></td>
-        <td><div class="kol-bcell">${num("boosting_cost", k.boosting_cost)}${eye("boosting_cost", show.boosting_cost !== false)}</div></td>
+        ${visBudget.map(({ f }) => {
+          if (admin) return `<td><div class="kol-bcell">${num(f, k[f])}${eye(f, cellOpen(k, f))}</div></td>`;
+          return cellOpen(k, f)
+            ? `<td><div class="kol-bcell">${num(f, k[f])}</div></td>`
+            : `<td><div class="kol-bcell" style="justify-content:center;color:#bcb5a4">—</div></td>`;
+        }).join("")}
         <td>${sel("objective", k.objective || "Awareness", OBJ, "kol-in obj")}</td>
         <td>${periodCell(k)}</td>
         <td><button class="kol-cellbtn" data-cond-edit title="เงื่อนไข">${k.conditions ? '<span class="material-symbols-outlined text-[15px]" style="color:#e1121c">sticky_note_2</span>' : '<span class="material-symbols-outlined text-[15px]">add</span>'}</button></td>
@@ -103,7 +123,7 @@
     kols.forEach((k, i) => { const t = effTier(k) || "—"; (groups[t] = groups[t] || []).push(i); });
     const tierKeys = TIER_ORDER.filter((t) => groups[t])
       .concat(Object.keys(groups).filter((t) => !TIER_ORDER.includes(t)).sort());
-    const colspan = admin ? 18 : 17;
+    const colspan = admin ? 18 : (14 + visBudget.length);
     const rows = tierKeys.map((t) => {
       const head = t === "—" ? `<span class="kol-gname">ไม่ระบุ Tier</span>` : `<span class="tier-chip tier-${["Nano", "Micro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>`;
       const body = groups[t].map((i) => rowHtml(kols[i], i)).join("");
@@ -111,32 +131,34 @@
     }).join("");
 
     const tot = (f) => kols.reduce((s, k) => s + (Number(k[f]) || 0), 0);
-    // Budget visibility for the customer — admins/managers can hide any figure
-    // (incl. Total Budget). Missing/true = shown; false = hidden from viewers.
-    const bshow = a.budget_show || {};
-    const bvis = (f) => bshow[f] !== false;
+    // Viewer totals reflect only the values the customer can actually see (open cells).
+    const totOpen = (f) => kols.reduce((s, k) => s + (cellOpen(k, f) ? (Number(k[f]) || 0) : 0), 0);
+    const viewerTotal = BUDGET_FIELDS.reduce((s, b) => s + (colVis(b.f) ? totOpen(b.f) : 0), 0);
+    // Budget total visibility — admins/managers can also hide the grand total.
     const bEye = (f) => admin
       ? `<button class="kol-eye ${bvis(f) ? "on" : ""}" data-budget-eye="${f}" title="โชว์/ซ่อนยอดนี้ตอนส่งลูกค้า"><span class="material-symbols-outlined text-[16px]">${bvis(f) ? "visibility" : "visibility_off"}</span></button>`
       : "";
+    const footVisible = (f) => admin || (f === "total" ? (!totalHidden && bvis("total") && visBudget.length > 0) : colVis(f));
     const footItem = (f, label, value, extraCls = "") => {
-      if (!admin && !bvis(f)) return "";   // viewers never see a hidden figure
+      if (!footVisible(f)) return "";   // viewers never see a hidden / collapsed figure
       return `<div class="kol-tot ${extraCls} ${admin && !bvis(f) ? "is-cust-hidden" : ""}"><span class="l">${label}</span><span class="kol-tot-vrow"><span class="v">${value}</span>${bEye(f)}</span></div>`;
     };
-    const anyBudgetVisible = admin || ["rate", "gen_code_price", "boosting_cost", "total"].some(bvis);
+    const fval = (f) => admin ? tot(f) : totOpen(f);
+    const anyBudgetVisible = admin || visBudget.length > 0;
     host.innerHTML = `<div class="kol-panel">
       <div class="kol-wrap"><table class="kol-table">
       <thead><tr>
         <th>#</th><th>Month</th><th>Tier</th><th>Type</th><th>KOL Name</th><th>SOW</th>
         <th>Product Focus</th><th>Approved</th><th>Post Date</th><th>Link</th>
-        <th>ค่าตัว</th><th>Gen Code</th><th>Boosting</th><th>Obj.</th><th>Period</th>
+        ${visBudget.map((b) => `<th>${b.th}</th>`).join("")}<th>Obj.</th><th>Period</th>
         <th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
       </tr></thead>
       <tbody>${rows}</tbody></table></div>
       ${anyBudgetVisible ? `<div class="kol-foot"><div class="kol-foot-items">
-        ${footItem("rate", "ค่าตัว", money(tot("rate")))}
-        ${footItem("gen_code_price", "Gen Code", money(tot("gen_code_price")))}
-        ${footItem("boosting_cost", "Boosting", money(tot("boosting_cost")))}
-        ${footItem("total", "Total Budget", money(tot("rate") + tot("gen_code_price") + tot("boosting_cost")), "kol-tot-budget")}
+        ${footItem("rate", "ค่าตัว", money(fval("rate")))}
+        ${footItem("gen_code_price", "Gen Code", money(fval("gen_code_price")))}
+        ${footItem("boosting_cost", "Boosting", money(fval("boosting_cost")))}
+        ${footItem("total", "Total Budget", money(admin ? (tot("rate") + tot("gen_code_price") + tot("boosting_cost")) : viewerTotal), "kol-tot-budget")}
       </div></div>` : ""}</div>`;
 
     // Budget visibility — admin/manager toggles which figures the customer sees.
