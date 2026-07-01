@@ -105,6 +105,56 @@
 
   <script src="./assets/app.js?v=33"></script>
   <script src="./assets/contentasset.js?v=39"></script>
+  <script>
+    (() => {
+      const brandNameSpan = (row) => Array.from(row.children)
+        .find((node) => node.tagName === "SPAN" && node.classList.contains("w-36"));
+      const enhanceBrandRows = () => {
+        const root = document.querySelector("#br-list");
+        if (!root || !window.CH) return;
+        root.querySelectorAll("[data-id]").forEach((row) => {
+          if (row.dataset.brandEditEnhanced) return;
+          const nameSpan = brandNameSpan(row);
+          const deleteBtn = row.querySelector("[data-del]");
+          if (!nameSpan || !deleteBtn) return;
+          row.dataset.brandEditEnhanced = "1";
+          const editBtn = document.createElement("button");
+          editBtn.type = "button";
+          editBtn.className = "text-on-surface-variant hover:text-primary";
+          editBtn.title = "แก้ชื่อแบรนด์";
+          editBtn.innerHTML = '<span class="material-symbols-outlined text-[18px]">edit</span>';
+          deleteBtn.before(editBtn);
+          editBtn.addEventListener("click", async () => {
+            const id = row.dataset.id;
+            const current = nameSpan.textContent.trim();
+            const next = prompt("แก้ชื่อแบรนด์", current);
+            if (next === null) return;
+            const name = next.trim();
+            if (!name || name === current) return;
+            try {
+              await window.CH.api("/brands/" + id, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+              });
+              nameSpan.textContent = name;
+              nameSpan.title = name;
+              window.CH.toast("แก้ชื่อแบรนด์แล้ว");
+            } catch (e) {
+              window.CH.toast(e.message || "แก้ชื่อแบรนด์ไม่สำเร็จ", "err");
+            }
+          });
+        });
+      };
+      const start = () => {
+        const mount = document.querySelector("#modal-root");
+        if (mount) new MutationObserver(enhanceBrandRows).observe(mount, { childList: true, subtree: true });
+        enhanceBrandRows();
+      };
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+      else start();
+    })();
+  </script>
   <script src="./assets/ca-section-a.js?v=4"></script>
   <script src="./assets/ca-section-b.js?v=11"></script>
   <script src="./assets/ca-section-c.js?v=10"></script>
