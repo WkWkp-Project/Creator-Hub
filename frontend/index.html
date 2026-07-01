@@ -12,6 +12,17 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha384-PPIZEGYM1v8zp5Py7UjFb79S58UeqCL9pYVnVPURKEqvioPROaVAJKKLzvH2rDnI" crossorigin="anonymous" referrerpolicy="no-referrer" />
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="stylesheet" href="./assets/styles.css?v=47" />
+<style>
+  /* Directory influencer form: campaign spend belongs in Section B, not roster profiles. */
+  #inf-form div:has(+ label > input[name="base_rate"]),
+  #inf-form label:has(input[name="base_rate"]),
+  #inf-form label:has(input[name="code_gen_fee"]),
+  #inf-form label:has(input[name="management_fee"]),
+  #inf-form label:has(input[name="agency_fee_pct"]),
+  #inf-form label:has(select[name="currency"]) {
+    display: none !important;
+  }
+</style>
 </head>
 <body class="bg-background text-on-surface antialiased flex min-h-screen font-sans">
 
