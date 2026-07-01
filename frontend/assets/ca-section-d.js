@@ -23,17 +23,24 @@
   const N = (v) => Number(v) || 0;
   const engagement = (m) => N(m.likes) + N(m.comments) + N(m.share) + N(m.saved) + N(m.repost);
   const conversions = (m) => N(m.lead) + N(m.sale);
-  const ctype = (k) => { const t = (k.media || []).map((x) => x.type); return t.includes("video") ? "วิดีโอ" : t.includes("album") ? "อัลบัม" : "ภาพนิ่ง"; };
+  // Media type — mirror Section C: an explicit media_type (set on import) wins,
+  // otherwise infer from Section B media, defaulting to ภาพนิ่ง.
+  const TYPE_LABEL = { image: "ภาพนิ่ง", album: "อัลบัม", video: "วิดีโอ" };
+  const ctype = (k) => {
+    if (k.media_type && TYPE_LABEL[k.media_type]) return TYPE_LABEL[k.media_type];
+    const t = (k.media || []).map((x) => x.type);
+    return t.includes("video") ? "วิดีโอ" : t.includes("album") ? "อัลบัม" : "ภาพนิ่ง";
+  };
   const fmtN = (n) => (n === "" || n == null) ? "" : Number(n).toLocaleString("en-US");
   const hasData = (m) => m && Object.values(m).some((v) => N(v) > 0);
 
   let expanded = false, curAsset = null, curHost = null, curRoster = [];
   let sortKey = "engagement", sortDir = "desc";
-  const tierRank = (t) => ({ Mega: 3, Micro: 2, Nano: 1 }[t] || 0);
+  const tierRank = (t) => ({ Mega: 5, Macro: 4, "Mid-Tier": 3, Micro: 2, Nano: 1 }[t] || 0);
   const nameOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).name || k.name || ("#" + k.influencer_id);
   const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || N((k.metrics || {}).followers);
-  const tierOf = (k) => k.tier || (curRoster.find((r) => r.id === k.influencer_id) || {}).tier || "";
-  const tierChip = (k) => { const t = tierOf(k); return t ? `<span class="tier-chip tier-${["Nano", "Micro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>` : "—"; };
+  const tierOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).tier || k.tier || "";
+  const tierChip = (k) => { const t = tierOf(k); return t ? `<span class="tier-chip tier-${["Nano", "Micro", "Mid-Tier", "Macro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>` : "—"; };
 
   // Sortable columns (every header is clickable to toggle asc/desc).
   const SORT_COLS = [
