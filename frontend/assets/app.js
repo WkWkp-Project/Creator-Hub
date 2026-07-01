@@ -397,7 +397,7 @@
     view.appendChild(reachRow);
 
     // Scope of work + Financial breakdown
-    const midRow = el(`<section class="grid grid-cols-1 lg:grid-cols-2 gap-gutter"></section>`);
+    const midRow = el(`<section class="grid grid-cols-1 gap-gutter"></section>`);
     const scope = (inf.scope_of_work || []);
     midRow.appendChild(el(`
       <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
@@ -422,38 +422,10 @@
         </div>
       </div>`));
 
-    const feeRow = (label, val) => `
-      <div class="flex justify-between items-center py-3 border-b border-outline-variant">
-        <span class="text-on-surface">${label}</span><span class="font-semibold text-[18px]">${fmtMoney(val, ccy)}</span></div>`;
-    if (inf.base_rate === undefined && inf.total_fee === undefined) {
-      // Money fields were redacted server-side for this viewer.
-      midRow.appendChild(el(`<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg flex items-center gap-md text-on-surface-variant"><span class="material-symbols-outlined opacity-60">lock</span><div><div class="font-semibold text-on-surface">Financial Breakdown</div><div class="text-[13px]">คุณไม่มีสิทธิ์ดูข้อมูลการเงินของอินฟลูเอนเซอร์</div></div></div>`));
-    } else midRow.appendChild(el(`
-      <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
-        <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center">
-          <h3 class="text-[20px] font-semibold">Financial Breakdown</h3>
-          <span class="bg-secondary-container text-on-secondary-container text-[12px] font-semibold px-sm py-1 rounded-full">Est. Rate</span>
-        </div>
-        <div class="p-lg pt-0">
-          ${feeRow("Base Rate <span class='text-on-surface-variant'>(ค่าตัว)</span>", inf.base_rate)}
-          ${feeRow("Code Generation Fee <span class='text-on-surface-variant'>(ค่าเจนโค้ด)</span>", inf.code_gen_fee)}
-          ${feeRow("Management Fee <span class='text-on-surface-variant'>(ค่าเมเนจฟี)</span>", inf.management_fee)}
-          <div class="flex justify-between items-center py-3 border-b border-outline-variant bg-surface-container-low/40">
-            <span class="text-on-surface-variant">Subtotal <span class="text-[12px]">(ก่อนเอเจนฟี)</span></span>
-            <span class="font-semibold text-[16px] text-on-surface-variant">${fmtMoney(inf.subtotal_fee, ccy)}</span>
-          </div>
-          <div class="flex justify-between items-center py-3 border-b border-outline-variant">
-            <span class="text-on-surface">Agency Fee <span class="text-on-surface-variant">(ค่าเอเจนฟี)</span>
-              <span class="ml-1 bg-primary-fixed text-primary text-[12px] font-bold px-2 py-[2px] rounded-full">${(inf.agency_fee_pct || 0).toFixed(inf.agency_fee_pct % 1 ? 1 : 0)}%</span>
-            </span>
-            <span class="font-semibold text-[18px]">${fmtMoney(inf.agency_amount, ccy)}</span>
-          </div>
-          <div class="mt-md bg-surface-container-low rounded-xl px-md py-3 flex justify-between items-center">
-            <span class="text-[18px] font-bold">Total Fee <span class="text-[13px] font-medium text-on-surface-variant">(รวมทั้งหมด)</span></span>
-            <span class="text-[24px] font-extrabold text-primary">${fmtMoney(inf.total_fee, ccy)}</span>
-          </div>
-        </div>
-      </div>`));
+    // Financial Breakdown card removed — per-KOL fees are entered per campaign in
+    // Section B (KOL Plan), so the influencer-level fee estimate is no longer shown
+    // here (and no longer prefills Section B). The fee fields still exist on the
+    // model for import/back-office use.
     view.appendChild(midRow);
 
     // Campaign fit + past campaigns
@@ -607,7 +579,7 @@
     if (rows.length) {
       // best-in-class per dimension (for highlighting)
       const best = {};
-      const dims = ["avg_engagement_rate", "avg_growth_30d", "total_reach", "avg_fit_score", "reach_per_1k_thb"];
+      const dims = ["avg_engagement_rate", "avg_growth_30d", "total_reach", "avg_fit_score"];
       dims.forEach((d) => { best[d] = Math.max(...rows.map((r) => r[d] || 0)); });
       const maxReach = best.total_reach || 1;
       const hi = (r, d) => (r[d] === best[d] && r[d] > 0) ? "text-secondary font-bold" : "";
@@ -627,8 +599,6 @@
                 <th class="py-2 px-sm text-right">Avg ER</th>
                 <th class="py-2 px-sm text-right">Avg Growth</th>
                 <th class="py-2 px-sm text-right">Avg Fit</th>
-                <th class="py-2 px-sm text-right">Avg Fee</th>
-                <th class="py-2 px-sm text-right" title="Reach delivered per ฿1,000 of fee">Reach / ฿1k</th>
               </tr></thead>
               <tbody>
                 ${rows.map((r) => `
@@ -644,8 +614,6 @@
                     ${cell((r.avg_engagement_rate).toFixed(1)+"%", hi(r,'avg_engagement_rate'))}
                     ${cell((r.avg_growth_30d>=0?"+":"")+r.avg_growth_30d.toFixed(1)+"%", hi(r,'avg_growth_30d'))}
                     ${cell(Math.round(r.avg_fit_score)+"%", hi(r,'avg_fit_score'))}
-                    ${cell(fmtMoney(r.avg_total_fee), "")}
-                    ${cell(fmtNum(r.reach_per_1k_thb), hi(r,'reach_per_1k_thb'))}
                   </tr>`).join("")}
               </tbody>
             </table>
@@ -845,6 +813,9 @@
   //  FINANCIALS
   // ============================================================
   route("financials", async (view) => {
+    // Financials hidden for now — its figures came from influencer fee estimates,
+    // not the live campaign spend in Section B. Remove the next line to restore.
+    location.hash = "#/home"; return;
     const f = await api("/stats/financials");
     view.appendChild(el(`<h1 class="text-[32px] font-semibold tracking-tight">Financials</h1>`));
     const stat = (label, val, icon, sub = "") => `
@@ -1179,8 +1150,7 @@
         <div>1. <b>Directory</b> — ดู/ค้นหา/กรองอินฟลูเอนเซอร์ (ตาม Tier, แพลตฟอร์ม, หมวด, ราคา)</div>
         <div>2. <b>Add / Import</b> — เพิ่มทีละคน หรืออัปโหลด Excel/CSV (เฉพาะ Admin)</div>
         <div>3. <b>Campaigns</b> — สร้างแคมเปญ มอบหมายอินฟลู และตั้งงบ</div>
-        <div>4. <b>Financials</b> — ดูมูลค่ารวม โครงสร้างค่าใช้จ่าย และ Top earners</div>
-        <div>5. <b>Analytics</b> — เปรียบเทียบ performance ระหว่างหมวด</div>`)}
+        <div>4. <b>Analytics</b> — เปรียบเทียบ performance ระหว่างหมวด</div>`)}
       ${cardBox("help", "คำถามที่พบบ่อย", `
         <div><b>Tier คำนวณยังไง?</b> อัตโนมัติจากจำนวนผู้ติดตาม (แก้เองได้ในฟอร์ม)</div>
         <div><b>viewer ทำอะไรได้?</b> ดูข้อมูลทุกหน้า แต่แก้ไข/เพิ่ม/ลบไม่ได้</div>

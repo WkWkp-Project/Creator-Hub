@@ -41,7 +41,7 @@ def overview(_: models.User = Depends(get_current_user), db: Session = Depends(g
         .group_by(models.Influencer.tier)
     ).all()
 
-    tier_order = {"Nano": 0, "Micro": 1, "Mega": 2}
+    tier_order = {"Nano": 0, "Micro": 1, "Mid-Tier": 2, "Macro": 3, "Mega": 4}
     tier_rows = sorted(
         [{"name": t or "Unranked", "count": c} for t, c in tiers],
         key=lambda r: tier_order.get(r["name"], 99),
@@ -115,7 +115,7 @@ def financials(_: models.User = Depends(require_admin), db: Session = Depends(ge
         slot = by_tier.setdefault(t, {"tier": t, "count": 0, "total_fee": 0.0})
         slot["count"] += 1
         slot["total_fee"] += i.total_fee
-    tier_order = {"Nano": 0, "Micro": 1, "Mega": 2, "Unranked": 9}
+    tier_order = {"Nano": 0, "Micro": 1, "Mid-Tier": 2, "Macro": 3, "Mega": 4, "Unranked": 9}
     tier_rows = sorted(by_tier.values(), key=lambda r: tier_order.get(r["tier"], 9))
     for r in tier_rows:
         r["total_fee"] = round(r["total_fee"], 2)

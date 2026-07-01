@@ -250,7 +250,9 @@
       if (!ids.length) { m.remove(); return; }
       const kols = (a.kols || []).slice();
       ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", sow: [], product_focus: "", client_approved: "Pending", post_date: "", link: "", rate: r.base_rate || 0, gen_code_price: r.code_gen_fee || 0, boosting_cost: 0, objective: "Awareness", period_from: "", period_to: "", conditions: "", caption: "", media: [], show: { rate: true, gen_code_price: true, boosting_cost: true } });
+        // Budget is entered per campaign in the table below — do NOT prefill from
+        // the influencer's Directory fee estimate (rate/gen_code start blank).
+        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", sow: [], product_focus: "", client_approved: "Pending", post_date: "", link: "", rate: 0, gen_code_price: 0, boosting_cost: 0, objective: "Awareness", period_from: "", period_to: "", conditions: "", caption: "", media: [], show: { rate: true, gen_code_price: true, boosting_cost: true } });
       });
       try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
