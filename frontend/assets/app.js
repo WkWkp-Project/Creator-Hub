@@ -179,7 +179,15 @@
     else { location.hash = fallback; }
   }
 
+  // Monotonic render token. Route handlers are async (they await the API), so a
+  // navigation that starts while a previous one is still loading would otherwise
+  // let the old handler's late appendChild() land in the new page — stacking two
+  // routes. We render each route into a fresh, off-DOM element and only swap it
+  // in if it's still the current render; a superseded render is discarded whole,
+  // so its late async appends go to a detached node no one sees.
+  let renderGen = 0;
   async function render() {
+    const gen = ++renderGen;
     const hash = location.hash || "#/directory";
     recordNav(hash);
     const [path, param] = hash.replace(/^#/, "").split("/").filter(Boolean).length
@@ -188,11 +196,15 @@
     document.querySelectorAll(".nav-link").forEach((a) => {
       a.classList.toggle("active", a.dataset.route && hash.startsWith(a.dataset.route));
     });
-    const view = $("#view");
-    view.innerHTML = "";
+    const live = $("#view");
+    const view = document.createElement("div");
+    view.id = "view";                 // becomes the live #view once committed
+    view.className = live.className;   // keep the layout classes handlers expect
     const handler = routes[path] || routes["directory"];
     try { await handler(view, param); }
     catch (e) { view.appendChild(el(`<div class="text-error p-lg">Error: ${esc(e.message)}</div>`)); }
+    if (gen !== renderGen) return;     // a newer navigation won — drop this render
+    $("#view").replaceWith(view);      // swap in the freshly built page (old one discarded)
   }
 
   function parseHash(hash) {
