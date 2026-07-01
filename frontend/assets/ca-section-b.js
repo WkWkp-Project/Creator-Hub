@@ -20,10 +20,19 @@
     const admin = CA.canEdit(a);   // admin or a manager assigned to this campaign
     const kols = a.kols || [];
     const inf = (id) => roster.find((r) => r.id === id) || {};
-    const TIERS = ["", "Nano", "Micro", "Mega"];
     const APPROVE = ["Pending", "Posted", "Approve"];
     const OBJ = ["Awareness", "Engagement", "Conversion"];
     const ro = admin ? "" : "disabled";
+
+    // Tier is the single source of truth in the Directory (derived from the
+    // creator's follower count). Section B mirrors it read-only — it is never
+    // hand-edited here, so a campaign can't drift from the Directory profile.
+    const TIER_LABELS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
+    const tierClass = (t) => (TIER_LABELS.includes(t) ? t : "custom");
+    const tierOf = (k) => inf(k.influencer_id).tier || k.tier || "";
+    const tierChip = (t) => (t
+      ? `<span class="tier-chip tier-${tierClass(t)}">${esc(t)}</span>`
+      : `<span style="color:#bcb5a4">—</span>`);
 
     // Budget columns. For the customer view a column shows only if at least one
     // KOL has its eye open; if every value in it is hidden the whole column
@@ -94,7 +103,7 @@
       return `<tr data-i="${i}">
         <td class="kol-rownum">${i + 1}</td>
         <td>${monthSel(k.month)}</td>
-        <td>${sel("tier", k.tier ?? person.tier ?? "", TIERS)}</td>
+        <td>${tierChip(tierOf(k))}</td>
         <td>${txt("kol_type", k.kol_type ?? person.niche ?? "", "kol-in sm")}</td>
         <td class="kol-name"><a href="#/influencer/${k.influencer_id}">${esc(name)}</a></td>
         <td><button class="kol-cellbtn" data-sow-edit><span class="material-symbols-outlined text-[15px]">checklist</span>${(k.sow || []).length || "+"}</button></td>
@@ -116,16 +125,17 @@
       </tr>`;
     };
 
-    // Group rows by tier so the table is easy to scan (Mega → Micro → Nano → unspecified).
-    const TIER_ORDER = ["Mega", "Micro", "Nano"];
-    const effTier = (k) => k.tier || inf(k.influencer_id).tier || "";
+    // Group rows by tier (from the Directory) so the table is easy to scan
+    // (Mega → Macro → Mid-Tier → Micro → Nano → unspecified).
+    const TIER_ORDER = ["Mega", "Macro", "Mid-Tier", "Micro", "Nano"];
+    const effTier = (k) => tierOf(k);
     const groups = {};
     kols.forEach((k, i) => { const t = effTier(k) || "—"; (groups[t] = groups[t] || []).push(i); });
     const tierKeys = TIER_ORDER.filter((t) => groups[t])
       .concat(Object.keys(groups).filter((t) => !TIER_ORDER.includes(t)).sort());
     const colspan = admin ? 18 : (14 + visBudget.length);
     const rows = tierKeys.map((t) => {
-      const head = t === "—" ? `<span class="kol-gname">ไม่ระบุ Tier</span>` : `<span class="tier-chip tier-${["Nano", "Micro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>`;
+      const head = t === "—" ? `<span class="kol-gname">ไม่ระบุ Tier</span>` : `<span class="tier-chip tier-${tierClass(t)}">${esc(t)}</span>`;
       const body = groups[t].map((i) => rowHtml(kols[i], i)).join("");
       return `<tr class="kol-group"><td colspan="${colspan}">${head}<span class="kol-gcount">${groups[t].length} KOL</span></td></tr>${body}`;
     }).join("");
@@ -197,11 +207,6 @@
           return;
         }
         a.kols[i][f] = inpEl.type === "number" ? (inpEl.value === "" ? "" : Number(inpEl.value)) : inpEl.value;
-        if (f === "tier") { // tier drives the grouping — save then re-render to regroup
-          clearTimeout(timer);
-          saveKols(a, a.kols).then(() => renderKolTable(host, a, roster)).catch((e) => toast(e.message, "err"));
-          return;
-        }
         persist();
       });
       if (money$) { // edit on raw digits, settle back to comma-grouped on blur
@@ -348,20 +353,21 @@
     const d1 = (s) => { if (!s) return ""; const p = String(s).split("-"); return p.length < 3 ? esc(s) : `${+p[2]} ${MON[+p[1]] || ""}`; };
     const range = (k) => { const f = d1(k.period_from), t = d1(k.period_to); return f || t ? `${f || "…"} – ${t || "…"}` : "—"; };
     const nameOf = (k) => (roster.find((r) => r.id === k.influencer_id) || {}).name || k.name || ("#" + k.influencer_id);
+    const tierR = (k) => (roster.find((r) => r.id === k.influencer_id) || {}).tier || k.tier || "";   // Directory tier
     const linkTxt = (u) => { u = (u || "").trim(); if (!u) return "—"; return `<a href="${esc(u)}" target="_blank" rel="noopener">เปิดโพสต์ ↗</a>`; };
     const kols = a.kols || [];
     const tot = (f) => kols.reduce((s, k) => s + (Number(k[f]) || 0), 0);
     const grand = tot("rate") + tot("gen_code_price") + tot("boosting_cost");
     const bshow = a.budget_show || {};
     const bvis = (f) => bshow[f] !== false;   // hidden figures don't go to the customer
-    const TIER_ORDER = ["Mega", "Micro", "Nano"];
+    const TIER_ORDER = ["Mega", "Macro", "Mid-Tier", "Micro", "Nano"];
     const ordered = kols.map((k, i) => ({ k, i })).sort((x, y) => {
       const rank = (t) => { const ix = TIER_ORDER.indexOf(t || ""); return ix < 0 ? 99 : ix; };
-      return rank(x.k.tier) - rank(y.k.tier);
+      return rank(tierR(x.k)) - rank(tierR(y.k));
     });
     const rows = ordered.map(({ k }, n) => `<tr>
       <td class="c">${n + 1}</td><td class="c">${esc(k.month) || "—"}</td>
-      <td class="c">${k.tier ? `<span class="tier t-${esc(k.tier)}">${esc(k.tier)}</span>` : "—"}</td>
+      <td class="c">${tierR(k) ? `<span class="tier t-${esc(tierR(k))}">${esc(tierR(k))}</span>` : "—"}</td>
       <td>${esc(k.kol_type) || "—"}</td><td class="b">${esc(nameOf(k))}</td>
       <td>${(k.sow || []).length ? (k.sow || []).map(esc).join(", ") : "—"}</td>
       <td>${esc(k.product_focus) || "—"}</td><td class="c">${esc(k.client_approved || "Pending")}</td>
