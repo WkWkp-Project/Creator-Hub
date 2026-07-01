@@ -67,6 +67,7 @@ app.include_router(campaigns.router)
 app.include_router(imports.router)
 app.include_router(stats.router)
 app.include_router(uploads.router)
+app.include_router(uploads.files_router)   # public /uploads/... served from the DB
 app.include_router(backup.router)
 app.include_router(content.router)
 app.include_router(content_asset.router)
@@ -90,9 +91,8 @@ def ready(response: Response):
     return {"status": "not_ready", "database": "unavailable"}
 
 
-# Serve user-uploaded media (avatars + campaign media).
-if uploads.UPLOAD_ROOT.is_dir():
-    app.mount("/uploads", StaticFiles(directory=str(uploads.UPLOAD_ROOT)), name="uploads")
+# User-uploaded media (avatars + campaign media) is served from the DB by
+# uploads.files_router (registered above) so it survives an ephemeral filesystem.
 
 # Optionally serve the static frontend when bundled in the same container.
 # Resolution order:

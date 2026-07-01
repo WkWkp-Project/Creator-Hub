@@ -7,7 +7,7 @@ scope of work and past campaign history.
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON, text, false
+from sqlalchemy import Boolean, DateTime, Float, Integer, LargeBinary, String, Text, JSON, text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -173,3 +173,17 @@ class ChangeLog(Base):
     # Optional before/after for sensitive changes, e.g. {"role": {"from","to"}}.
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class UploadedFile(Base):
+    """User-uploaded media (avatars + campaign media) stored IN the database so it
+    survives on hosts with an ephemeral filesystem (e.g. Render), where files on
+    local disk are wiped on every restart/redeploy. `path` mirrors the public URL
+    tail ("campaigns/<hash>.png") so the served URL is unchanged."""
+    __tablename__ = "uploaded_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    path: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str] = mapped_column(String(100), default="application/octet-stream")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
