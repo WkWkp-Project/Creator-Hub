@@ -60,7 +60,20 @@
     { type: "video", icon: "movie", label: "วิดีโอ" },
   ];
   const typeLabel = (t) => (BOXES.find((b) => b.type === t) || {}).label || t;
-  const ctype = (k) => { const t = (k.media || []).map((x) => x.type); return t.includes("video") ? "video" : t.includes("album") ? "album" : "image"; };
+  // Media bucket: an explicit media_type (set on import) wins; otherwise it is
+  // inferred from the media uploaded in Section B, defaulting to "image".
+  const ctype = (k) => {
+    if (k.media_type && BOXES.some((b) => b.type === k.media_type)) return k.media_type;
+    const t = (k.media || []).map((x) => x.type);
+    return t.includes("video") ? "video" : t.includes("album") ? "album" : "image";
+  };
+  // Accepted values for the import "Type" column (TH + EN) → canonical bucket.
+  const TYPE_ALIASES = {
+    image: ["image", "images", "photo", "photos", "picture", "still", "img", "single", "ภาพนิ่ง", "ภาพ", "รูป", "รูปภาพ"],
+    album: ["album", "albums", "carousel", "gallery", "อัลบั้ม", "อัลบัม", "หลายรูป"],
+    video: ["video", "videos", "vdo", "reel", "reels", "clip", "movie", "วิดีโอ", "วีดีโอ", "คลิป"],
+  };
+  const normType = (v) => { const x = String(v || "").trim().toLowerCase(); for (const t in TYPE_ALIASES) if (TYPE_ALIASES[t].includes(x)) return t; return null; };
 
   const N = (v) => Number(v) || 0;
   const engagement = (m) => N(m.likes) + N(m.comments) + N(m.share) + N(m.saved) + N(m.repost);
@@ -196,6 +209,7 @@
   const FIELD_LABEL = { reach: "Reach", impression: "Impressions", video_view: "Video View", likes: "Likes", comments: "Comments", share: "Share", saved: "Saved", repost: "Repost", link_click: "Traffic", lead: "Lead", sale: "Sale", ad_spend: "Ad Spend" };
   const COLMAP = {
     kol: ["kol", "kols", "kols/channel", "channel", "name", "creator", "ชื่อ"],
+    type: ["type", "media", "media type", "media_type", "format", "content type", "content", "ประเภท", "ประเภทสื่อ", "รูปแบบ", "สื่อ"],
     reach: ["reach"], impression: ["impression", "impressions", "impr", "impr."],
     video_view: ["video view", "video views", "views", "vdo view", "view"],
     likes: ["like", "likes"], comments: ["comment", "comments"], share: ["share", "shares"],
@@ -207,17 +221,19 @@
   const colKey = (h) => { const x = String(h || "").trim().toLowerCase(); for (const f in COLMAP) if (COLMAP[f].includes(x)) return f; return null; };
 
   function openImportModal(a) {
-    const cols = ["KOL", ...Object.values(FIELD_LABEL)];
+    const cols = ["KOL", "Type", ...Object.values(FIELD_LABEL)];
     const template = cols.join(",") + "\n"
-      + "Elena Rodriguez,110407,119517,0,66,23,51,8,7,90,0,0,3000\n"
-      + "David Kim,124200,152000,0,2256,52,32,62,0,140,0,0,6000";
+      + "Elena Rodriguez,ภาพนิ่ง,110407,119517,0,66,23,51,8,7,90,0,0,3000\n"
+      + "Priya Sharma,อัลบั้ม,90000,120000,0,1200,40,20,30,0,80,0,0,2500\n"
+      + "David Kim,วิดีโอ,124200,152000,540000,2256,52,32,62,0,140,0,0,6000";
     const fmtDoc = `<div class="imp-doc">
       <div class="imp-doc-h">ฟอแมตไฟล์ที่ระบบรับ — CSV (export จากหลังบ้านแอด แล้ว Save as .csv)</div>
       <table class="imp-doc-t"><thead><tr><th>คอลัมน์</th><th>แมชเข้ากับ</th><th>จำเป็น?</th></tr></thead><tbody>
         <tr><td><b>KOL</b></td><td>ชื่อ KOL ในแคมเปญ (ใช้จับคู่)</td><td>จำเป็น</td></tr>
+        <tr><td><b>Type</b></td><td>ประเภทสื่อ → แยกกล่อง ภาพนิ่ง / อัลบั้ม / วิดีโอ</td><td>แนะนำ</td></tr>
         ${Object.keys(FIELD_LABEL).map((f) => `<tr><td>${FIELD_LABEL[f]}</td><td>metrics.${f}</td><td>ถ้ามี</td></tr>`).join("")}
       </tbody></table>
-      <div class="imp-doc-note">• จับคู่ด้วย <b>ชื่อ KOL</b> (ไม่สนตัวพิมพ์เล็ก/ใหญ่) • ตัวเลขใส่ลูกน้ำได้ • หัวคอลัมน์รองรับชื่อใกล้เคียง (Impr., Views, Spend…) • <b>Ad Spend</b> = ค่ายิงแอด จะอัปเดตเข้า Boosting ของ KOL</div>
+      <div class="imp-doc-note">• จับคู่ด้วย <b>ชื่อ KOL</b> (ไม่สนตัวพิมพ์เล็ก/ใหญ่) • <b>Type</b> รับค่า: ภาพนิ่ง/อัลบั้ม/วิดีโอ หรือ image/album/video (ไม่ใส่ = ภาพนิ่ง) • ตัวเลขใส่ลูกน้ำได้ • หัวคอลัมน์รองรับชื่อใกล้เคียง (Impr., Views, Spend…) • <b>Ad Spend</b> = ค่ายิงแอด จะอัปเดตเข้า Boosting ของ KOL</div>
       <button data-tpl class="imp-btn"><span class="material-symbols-outlined text-[16px]">download</span>ดาวน์โหลด template .csv</button>
     </div>`;
     const body = `
@@ -243,7 +259,8 @@
       const headers = rows[0].map(colKey);
       const kolCol = headers.indexOf("kol");
       if (kolCol < 0) return toast("ไม่พบคอลัมน์ KOL (ชื่อ KOL) ในหัวตาราง", "err");
-      const fieldCols = headers.map((f, idx) => ({ f, idx })).filter((x) => x.f && x.f !== "kol");
+      const typeCol = headers.indexOf("type");   // optional — routes each row to a media box
+      const fieldCols = headers.map((f, idx) => ({ f, idx })).filter((x) => x.f && x.f !== "kol" && x.f !== "type");
       if (!fieldCols.length) return toast("ไม่พบคอลัมน์เมตริกที่รองรับ", "err");
       const lut = new Map();
       (a.kols || []).forEach((k, i) => { lut.set(nameOf(k).trim().toLowerCase(), i); if (k.name) lut.set(k.name.trim().toLowerCase(), i); });
@@ -251,15 +268,20 @@
       for (let r = 1; r < rows.length; r++) {
         const nm = (rows[r][kolCol] || "").trim(); if (!nm) continue;
         const idx = lut.get(nm.toLowerCase());
+        const mediaType = typeCol >= 0 ? normType(rows[r][typeCol]) : null;
         const vals = {};
         fieldCols.forEach(({ f, idx: ci }) => { const raw = String(rows[r][ci] || "").replace(/[^\d.-]/g, ""); if (raw !== "") vals[f] = Number(raw); });
-        if (idx == null) unmatched.push(nm); else matched.push({ i: idx, name: nm, vals });
+        if (idx == null) unmatched.push(nm); else matched.push({ i: idx, name: nm, vals, mediaType });
       }
       parsed = matched;
       const fieldsFound = fieldCols.map((x) => FIELD_LABEL[x.f]).join(", ");
+      const typeCount = matched.filter((x) => x.mediaType).length;
       m.querySelector("#imp-preview").innerHTML = `<div class="imp-prev">
         <div class="imp-prev-h">พบ <b style="color:#3a7d44">${matched.length}</b> แมชได้ · <b style="color:${unmatched.length ? "#b06a00" : "#8a8a8f"}">${unmatched.length}</b> ไม่พบชื่อในแคมเปญ</div>
         <div class="imp-prev-cols">คอลัมน์ที่จะอัปเดต: ${esc(fieldsFound) || "—"}</div>
+        ${typeCol >= 0
+          ? `<div class="imp-prev-cols">แยกประเภทสื่อจากคอลัมน์ Type: <b>${typeCount}</b>/${matched.length} แถว (ที่ไม่ระบุ = ภาพนิ่ง)</div>`
+          : `<div class="imp-prev-cols" style="color:#b06a00">⚠ ไม่มีคอลัมน์ <b>Type</b> → ทุก KOL จะเข้ากล่อง "ภาพนิ่ง" ทั้งหมด (เพิ่มคอลัมน์ Type เพื่อแยก อัลบั้ม/วิดีโอ)</div>`}
         ${matched.length ? `<ul class="imp-prev-list">${matched.slice(0, 12).map((x) => `<li><span class="material-symbols-outlined text-[15px]" style="color:#3a7d44">check_circle</span>${esc(x.name)} <span style="color:#8a8a8f">· ${Object.keys(x.vals).length} ค่า</span></li>`).join("")}${matched.length > 12 ? `<li style="color:#8a8a8f">…และอีก ${matched.length - 12}</li>` : ""}</ul>` : ""}
         ${unmatched.length ? `<div class="imp-prev-warn"><span class="material-symbols-outlined text-[15px]">warning</span>ไม่พบชื่อในแคมเปญ: ${unmatched.slice(0, 8).map(esc).join(", ")}${unmatched.length > 8 ? ` …(+${unmatched.length - 8})` : ""}</div>` : ""}
       </div>`;
@@ -273,8 +295,9 @@
     });
     m.querySelector("[data-apply]").addEventListener("click", async () => {
       if (!parsed || !parsed.length) return;
-      parsed.forEach(({ i, vals }) => {
+      parsed.forEach(({ i, vals, mediaType }) => {
         const k = a.kols[i]; k.metrics = Object.assign({}, k.metrics || {});
+        if (mediaType) k.media_type = mediaType;   // route this KOL to the matching media box
         Object.keys(vals).forEach((f) => { if (f === "ad_spend") k.boosting_cost = vals[f]; else k.metrics[f] = vals[f]; });
       });
       try { await saveAsset(a.id, { kols: a.kols }, a); toast(`นำเข้าผล ${parsed.length} KOL แล้ว ✓`); m.remove(); rerender(); }
