@@ -21,9 +21,15 @@
 
   // Section A is a fixed 3-slot template; stored input_files fill each slot in order.
   // Kept in core because the campaign LIST cards summarise the linked-file count.
-  const SECTION_A_TITLES = ["Product Information", "KOLs Communication Plan", "KOLs Brief"];
-  const sectionAFiles = (a) => SECTION_A_TITLES.map((title, i) => ({
-    ...((a.input_files || [])[i] || {}), title, n: String(i + 1).padStart(2, "0"),
+  // Each Section-A slot carries its display title AND the SYNCED tag, kept in
+  // sync so the tag always matches the heading (not the legacy template value).
+  const SECTION_A_SLOTS = [
+    { title: "Product Information", synced: "Product_Info" },
+    { title: "KOLs Communication Plan", synced: "KOLs_Comm_Plan" },
+    { title: "KOLs Brief", synced: "KOLs_Brief" },
+  ];
+  const sectionAFiles = (a) => SECTION_A_SLOTS.map((slot, i) => ({
+    ...((a.input_files || [])[i] || {}), title: slot.title, synced: slot.synced, n: String(i + 1).padStart(2, "0"),
   }));
 
   const inpCls = "w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[14px] focus:border-primary focus:ring-1 focus:ring-primary";

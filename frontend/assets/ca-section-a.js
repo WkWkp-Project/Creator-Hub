@@ -17,6 +17,18 @@
     await saveAsset(a.id, { input_files: inputFiles }, a);
   }
 
+  // Full-size cover viewer (click a thumbnail to expand). Closes on backdrop /
+  // the ✕ button / Esc.
+  function openLightbox(src, title) {
+    if (!src) return;
+    const lb = el(`<div class="ca-lightbox"><button class="ca-lightbox-close" title="ปิด (Esc)"><span class="material-symbols-outlined">close</span></button><img src="${esc(src)}" alt="${esc(title || "")}"/>${title ? `<div class="ca-lightbox-cap">${esc(title)}</div>` : ""}</div>`);
+    const close = () => { lb.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    lb.addEventListener("click", (e) => { if (e.target === lb || e.target.closest(".ca-lightbox-close")) close(); });
+    document.addEventListener("keydown", onKey);
+    (document.querySelector("#modal-root") || document.body).appendChild(lb);
+  }
+
   function cardsHtml(a) {
     const canEdit = CA.canEdit(a);   // admin or a manager assigned to this campaign
     return sectionAFiles(a).map((f, i) => {
@@ -24,6 +36,7 @@
       const thumbSrc = f.thumb ? mediaSrc(f.thumb) : "";
       const thumbInner = thumbSrc
         ? `<img class="ca-thumb-img" src="${esc(thumbSrc)}" alt="${esc(f.title)}"/>
+           <button class="ca-thumb-zoom" data-expand="${i}" title="ดูรูปเต็ม"><span class="material-symbols-outlined" style="font-size:16px">zoom_out_map</span></button>
            ${canEdit ? `<div class="ca-thumb-actions">
              <button class="ca-thumb-btn" data-change="${i}" title="เปลี่ยนรูป"><span class="material-symbols-outlined" style="font-size:16px">photo_camera</span></button>
              <button class="ca-thumb-btn" data-remove="${i}" title="ลบรูป"><span class="material-symbols-outlined" style="font-size:16px">delete</span></button>
@@ -58,6 +71,11 @@
       if (url) window.open(url, "_blank", "noopener");
       else toast("ยังไม่ได้ลิงก์ไฟล์นี้", "info");
     }));
+
+    // Expand cover thumbnails (click image or the zoom button) — for everyone.
+    const expand = (elm) => { const img = elm.closest(".ca-thumb")?.querySelector(".ca-thumb-img"); if (img) openLightbox(img.getAttribute("src"), img.getAttribute("alt")); };
+    host.querySelectorAll(".ca-thumb-img").forEach((img) => img.addEventListener("click", (e) => { e.stopPropagation(); expand(img); }));
+    host.querySelectorAll("[data-expand]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); expand(b); }));
 
     if (!CA.canEdit(a)) return;
     const pickThumb = (slotIndex) => {

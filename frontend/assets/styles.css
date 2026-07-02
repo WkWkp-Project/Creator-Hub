@@ -204,6 +204,21 @@ body{ font-family:'Prompt','Poppins',sans-serif; }
 .ca-thumb-btn{ width:30px; height:30px; border-radius:7px; border:0; background:rgba(0,0,0,.55); color:#fff;
   display:flex; align-items:center; justify-content:center; cursor:pointer; }
 .ca-thumb-btn:hover{ background:rgba(0,0,0,.82); }
+/* Click-to-expand cover thumbnails */
+.ca-thumb.has-img .ca-thumb-img{ cursor:zoom-in; }
+.ca-thumb-zoom{ position:absolute; bottom:10px; right:10px; width:30px; height:30px; border-radius:7px; border:0;
+  background:rgba(0,0,0,.55); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer;
+  opacity:0; transition:opacity .15s; }
+.ca-thumb:hover .ca-thumb-zoom{ opacity:1; }
+.ca-thumb-zoom:hover{ background:rgba(0,0,0,.82); }
+.ca-lightbox{ position:fixed; inset:0; z-index:80; background:rgba(0,0,0,.85); backdrop-filter:blur(2px);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:32px; cursor:zoom-out; }
+.ca-lightbox img{ max-width:min(1100px,94vw); max-height:86vh; object-fit:contain; border-radius:10px;
+  box-shadow:0 12px 40px rgba(0,0,0,.5); cursor:default; }
+.ca-lightbox-cap{ color:#fff; font-weight:600; font-size:15px; }
+.ca-lightbox-close{ position:absolute; top:18px; right:22px; width:40px; height:40px; border-radius:50%; border:0;
+  background:rgba(255,255,255,.14); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.ca-lightbox-close:hover{ background:rgba(255,255,255,.28); }
 .ca-thumb-empty{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:5px; text-align:center; padding:12px; color:#d4d4d8; }
 .ca-thumb-hint{ font-size:13px; font-weight:700; color:#fff; }
