@@ -548,22 +548,32 @@
   }
 
   function openKolSowModal(a, idx, roster, host) {
-    const k = a.kols[idx]; const sel = new Set(k.sow || []);
-    const opts = () => a.sow_options || [];
+    const k = a.kols[idx];
+    const rowSow = Array.isArray(k.sow) ? k.sow : (k.sow ? [k.sow] : []);
+    const sel = new Set(rowSow);
+    let localOptions = [...(a.sow_options || []), ...rowSow]
+      .map((s) => String(s || "").trim())
+      .filter((s, i, arr) => s && arr.indexOf(s) === i);
+    const opts = () => localOptions;
+    const optionHtml = (o) => `<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(o)}" ${sel.has(o) ? "checked" : ""}/>${esc(o)}</label>`;
     const body = `<div class="text-[12px] text-on-surface-variant">Scope of Work สำหรับ ${esc((roster.find((r) => r.id === k.influencer_id) || {}).name || "KOL")}</div>
-      <div id="sl" class="flex flex-col gap-1">${opts().map((o) => `<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(o)}" ${sel.has(o) ? "checked" : ""}/>${esc(o)}</label>`).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ — เพิ่มด้านล่าง</div>`}</div>
+      <div id="sl" class="flex flex-col gap-1">${opts().map(optionHtml).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ — เพิ่มด้านล่าง</div>`}</div>
       <div class="flex gap-sm"><input id="sn" class="${inpCls}" placeholder="เพิ่มรายการใหม่"/><button data-add class="px-md py-2 rounded-lg bg-primary text-on-primary shrink-0">+</button></div>`;
     const m = modal("Scope of Work", "checklist", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
+    const renderOptions = () => { m.querySelector("#sl").innerHTML = opts().map(optionHtml).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีรายการ — เพิ่มด้านล่าง</div>`; };
     m.querySelector("[data-add]").addEventListener("click", async () => {
       const v = m.querySelector("#sn").value.trim(); if (!v) return;
-      a.sow_options = [...opts(), v];
+      if (!localOptions.includes(v)) localOptions.push(v);
+      sel.add(v);
+      a.sow_options = [...new Set([...(a.sow_options || []), ...localOptions])];
       try { await saveAsset(a.id, { sow_options: a.sow_options }, a); } catch (e) { return toast(e.message, "err"); }
-      m.querySelector("#sl").appendChild(el(`<label class="flex items-center gap-sm text-[14px]"><input type="checkbox" class="sw" value="${esc(v)}" checked/>${esc(v)}</label>`));
+      renderOptions();
       m.querySelector("#sn").value = "";
     });
     m.querySelector("[data-save]").addEventListener("click", async () => {
       k.sow = [...m.querySelectorAll(".sw:checked")].map((c) => c.value);
-      try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); }
+      a.sow_options = [...new Set([...(a.sow_options || []), ...localOptions])];
+      try { await saveAsset(a.id, { kols: a.kols, sow_options: a.sow_options }, a); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); }
     });
   }
 
