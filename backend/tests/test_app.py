@@ -494,12 +494,23 @@ def test_campaign_multiple_responsible_members():
 
 
 def test_campaign_budget_show_visibility():
+    viewer_id = client.get("/api/auth/me", headers=VIEWER).json()["id"]
     asset = client.post("/api/assets", json={
-        "campaign_name": "Budget Vis", "drive_folder_url": "https://drive.google.com/drive/folders/b"}).json()
+        "campaign_name": "Budget Vis", "drive_folder_url": "https://drive.google.com/drive/folders/b",
+        "assigned_user_ids": [viewer_id],
+        "kols": [{
+            "influencer_id": 0, "rate": 100, "gen_code_price": 20, "boosting_cost": 30,
+            "kol_price": 1000, "gencode_boosting": 200, "cart_added": 300,
+            "buy_asset": 400, "outside_shooting": 500,
+        }]}).json()
     assert asset["budget_show"] == {}   # default: everything shown
     upd = client.put(f"/api/assets/{asset['id']}", json={
-        "budget_show": {"total": False, "boosting_cost": False}}).json()
-    assert upd["budget_show"] == {"total": False, "boosting_cost": False}
+        "budget_show": {"total": False, "boosting_cost": False, "kol_price": False}}).json()
+    assert upd["budget_show"] == {"total": False, "boosting_cost": False, "kol_price": False}
+    viewer_kol = client.get(f"/api/assets/{asset['id']}", headers=VIEWER).json()["kols"][0]
+    for key in ("rate", "gen_code_price", "boosting_cost", "kol_price",
+                "gencode_boosting", "cart_added", "buy_asset", "outside_shooting"):
+        assert viewer_kol[key] == ""
     client.delete(f"/api/assets/{asset['id']}")
 
 
@@ -615,9 +626,15 @@ def test_internal_endpoints_are_admin_only():
 def test_unsafe_url_neutralised_on_save():
     a = client.post("/api/assets", json={
         "campaign_name": "XSS Camp", "drive_folder_url": "javascript:alert(1)",
-        "kols": [{"influencer_id": 0, "link": "javascript:steal()"}]}).json()
+        "kols": [{
+            "influencer_id": 0, "link": "javascript:steal()",
+            "profile_link": "data:text/html,boom",
+            "links": {"tiktok": "javascript:steal()", "instagram": "https://instagram.com/ok"},
+        }]}).json()
     assert a["drive_folder_url"] == ""            # javascript: stripped
     assert a["kols"][0]["link"] == ""
+    assert a["kols"][0]["profile_link"] == ""
+    assert a["kols"][0]["links"] == {"instagram": "https://instagram.com/ok"}
     ok = client.put(f"/api/assets/{a['id']}", json={"drive_folder_url": "https://drive.google.com/x"}).json()
     assert ok["drive_folder_url"] == "https://drive.google.com/x"   # http(s) kept
     client.delete(f"/api/assets/{a['id']}")

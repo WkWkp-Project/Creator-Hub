@@ -216,7 +216,7 @@
         post_date: p.post_date, month: p.month, tier: "", profile_link: p.profile_link,
         links: p.links || {}, kol_price: p.kol_price, gencode_boosting: p.gencode_boosting,
         cart_added: p.cart_added, buy_asset: p.buy_asset, outside_shooting: p.outside_shooting,
-        condition: p.condition, gencode: p.gencode, objective: "Awareness",
+        condition: p.condition, conditions: p.condition, gencode: p.gencode, objective: "Awareness",
         show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true },
       }));
       try { await saveKols(a, kols); toast(`นำเข้า ${parsed.length} KOL แล้ว`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
@@ -459,7 +459,7 @@
       ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
         // v2 row shape (KOLs-Confirmed format). Budget starts blank — it is entered
         // per campaign in the table, not prefilled from the Directory fee estimate.
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
+        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", conditions: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
       });
       try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
@@ -509,8 +509,9 @@
 
   function openKolCondModal(a, idx, roster, host) {
     const k = a.kols[idx];
-    const m = modal("KOL Conditions", "sticky_note_2", `<label class="flex flex-col gap-1">${lbl("เงื่อนไขเฉพาะ KOL คนนี้ (ถ้ามี)")}<textarea id="cd" rows="4" class="${inpCls}">${esc(k.conditions || "")}</textarea></label>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
-    m.querySelector("[data-save]").addEventListener("click", async () => { k.conditions = m.querySelector("#cd").value; try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); } });
+    const current = k.condition ?? k.conditions ?? "";
+    const m = modal("KOL Conditions", "sticky_note_2", `<label class="flex flex-col gap-1">${lbl("เงื่อนไขเฉพาะ KOL คนนี้ (ถ้ามี)")}<textarea id="cd" rows="4" class="${inpCls}">${esc(current)}</textarea></label>`, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
+    m.querySelector("[data-save]").addEventListener("click", async () => { const v = m.querySelector("#cd").value; k.condition = v; k.conditions = v; try { await saveKols(a, a.kols); m.remove(); renderKolTable(host, a, roster); } catch (e) { toast(e.message, "err"); } });
   }
 
   function openKolMediaModal(a, idx, roster, host) {

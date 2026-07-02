@@ -54,7 +54,12 @@ def _can_edit(user: models.User, asset: ContentAsset) -> bool:
     return user.role == "admin" or (user.role == "manager" and user.id in (asset.assigned_user_ids or []))
 
 
-_BUDGET_KEYS = ("rate", "gen_code_price", "boosting_cost")
+_BUDGET_KEYS = (
+    # Legacy Section B fields.
+    "rate", "gen_code_price", "boosting_cost",
+    # Section B v2 "KOLs Confirmed" fields.
+    "kol_price", "gencode_boosting", "cart_added", "buy_asset", "outside_shooting",
+)
 
 
 def _num(v) -> float:
@@ -77,7 +82,20 @@ def _sanitize_urls(obj: ContentAsset) -> None:
     """Neutralise any unsafe URLs stored on a campaign (drive folder + KOL links)."""
     obj.drive_folder_url = _safe_url(obj.drive_folder_url)
     if obj.kols:
-        obj.kols = [{**k, "link": _safe_url(k.get("link"))} if "link" in k else k for k in obj.kols]
+        cleaned = []
+        for k in obj.kols:
+            if not isinstance(k, dict):
+                cleaned.append(k)
+                continue
+            row = dict(k)
+            if "link" in row:
+                row["link"] = _safe_url(row.get("link"))
+            if "profile_link" in row:
+                row["profile_link"] = _safe_url(row.get("profile_link"))
+            if isinstance(row.get("links"), dict):
+                row["links"] = {p: _safe_url(u) for p, u in row["links"].items() if _safe_url(u)}
+            cleaned.append(row)
+        obj.kols = cleaned
     if obj.input_files:
         obj.input_files = [{**f, "drive_url": _safe_url(f.get("drive_url"))} if "drive_url" in f else f for f in obj.input_files]
 
@@ -287,12 +305,12 @@ def _parse_confirmed_kols(raw: bytes) -> list[dict]:
         m = val("A", r)
         if m:
             cur_month = str(m).strip()
-        links = {plat: link(L, r) for L, plat in _KOL_PLATFORM_COLS.items() if link(L, r)}
+        links = {plat: _safe_url(link(L, r)) for L, plat in _KOL_PLATFORM_COLS.items() if _safe_url(link(L, r))}
         sow_val = val("G", r)
         prof = link("D", r) or (val("D", r) if val("D", r) not in ("-", None) else "")
         rows.append({
             "month": cur_month, "kol_type": (val("B", r) or ""), "name": str(name).strip(),
-            "profile_link": prof or "", "followers": (val("E", r) or ""),
+            "profile_link": _safe_url(prof), "followers": (val("E", r) or ""),
             "content_type": (val("F", r) or ""),
             "sow": [sow_val] if sow_val and sow_val != "-" else [],
             "product_focus": (val("H", r) or ""), "post_date": (val("I", r) or ""),
