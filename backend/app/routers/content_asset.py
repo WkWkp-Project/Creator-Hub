@@ -287,7 +287,10 @@ _KOL_IMPORT_HEADERS = {
     "month": ("month", "campaign month", "period"),
     "kol_type": ("kols type", "kol type", "creator type", "tier", "type"),
     "name": ("kol name", "kols name", "kols/channel", "channel", "creator name", "creator", "influencer name", "name"),
-    "profile_link": ("profile link", "kol profile", "creator profile", "profile url", "profile"),
+    "profile_link": (
+        "channels link", "channel link", "kol channel link", "creator channel link",
+        "channel url", "profile link", "kol profile", "creator profile", "profile url", "profile",
+    ),
     "followers": ("followers", "follower", "no. followers", "number of followers", "fan"),
     "content_type": ("content type", "content format", "content"),
     "sow": ("sow", "scope of work", "deliverable", "deliverables"),

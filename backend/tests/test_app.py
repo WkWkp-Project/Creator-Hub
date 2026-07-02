@@ -426,6 +426,33 @@ def test_confirmed_kols_import_matches_shuffled_headers():
     assert row["gencode"] == "ALICE10"
 
 
+def test_confirmed_kols_import_reads_channels_link_hyperlink():
+    from io import BytesIO
+
+    import openpyxl
+
+    from app.routers.content_asset import _parse_confirmed_kols
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "KOLs Comfirmed"
+    for col, header in enumerate(["Month", "KOLs Type", "KOLs Name", "Channels Link", "Follower"], 1):
+        ws.cell(row=2, column=col, value=header)
+    ws["A3"] = "Apr 2026"
+    ws["B3"] = "Micro"
+    ws["C3"] = "Pimsook"
+    ws["D3"] = "Link"
+    ws["D3"].hyperlink = "https://www.tiktok.com/@pimsook.s"
+    ws["E3"] = 45000
+    buf = BytesIO()
+    wb.save(buf)
+
+    rows = _parse_confirmed_kols(buf.getvalue())
+
+    assert len(rows) == 1
+    assert rows[0]["profile_link"] == "https://www.tiktok.com/@pimsook.s"
+
+
 def test_members_brands_and_campaign_links():
     # member create + role validation
     bad = client.post("/api/members", json={"name": "X", "role": "superuser"})
