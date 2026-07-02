@@ -16,7 +16,214 @@
     await saveAsset(a.id, { kols }, a);
   }
 
-  function renderKolTable(host, a, roster) {
+  // v2 (KOLs-Confirmed Excel format) is the active table; v1 kept as a fallback.
+  let USE_V2 = true;
+  let kolSortDir = "desc";   // budget high→low by default
+  const renderKolTable = (host, a, roster) => (USE_V2 ? renderKolTableV2 : renderKolTableV1)(host, a, roster);
+
+  const V2_PLATFORMS = [
+    { k: "tiktok", icon: "fa-brands fa-tiktok", color: "#111111", label: "TikTok" },
+    { k: "instagram", icon: "fa-brands fa-instagram", color: "#E4405F", label: "Instagram" },
+    { k: "facebook", icon: "fa-brands fa-facebook", color: "#1877F2", label: "Facebook" },
+    { k: "lemon8", icon: "fa-solid fa-lemon", color: "#00d26a", label: "Lemon8" },
+    { k: "youtube", icon: "fa-brands fa-youtube", color: "#FF0000", label: "YouTube" },
+  ];
+  const V2_BUDGET = [
+    { f: "kol_price", th: "KOL Price" },
+    { f: "gencode_boosting", th: "Gencode/Boost" },
+    { f: "cart_added", th: "Cart Added" },
+    { f: "buy_asset", th: "Buy Asset" },
+    { f: "outside_shooting", th: "Outside" },
+  ];
+  const V2_TIERS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
+
+  function renderKolTableV2(host, a, roster) {
+    const admin = CA.canEdit(a);
+    const ro = admin ? "" : "disabled";
+    const kols = a.kols || [];
+    const inf = (id) => roster.find((r) => r.id === id) || {};
+    const nameOf = (k) => (k.influencer_id ? (inf(k.influencer_id).name || k.name) : k.name) || ("#" + (k.influencer_id || "?"));
+    const tierOf = (k) => (k.influencer_id ? inf(k.influencer_id).tier : k.tier) || "";
+    const follOf = (k) => (k.influencer_id ? inf(k.influencer_id).followers : k.followers) ?? "";
+    const tierCls = (t) => (V2_TIERS.includes(t) ? t : "custom");
+
+    // Customer visibility (eye) — reused from v1, now over the v2 budget fields.
+    const bshow = a.budget_show || {};
+    const bvis = (f) => bshow[f] !== false;
+    const cellOpen = (k, f) => (k.show || {})[f] !== false;
+    const colOpen = (f) => kols.some((k) => cellOpen(k, f));
+    const colVis = (f) => admin || (bvis(f) && colOpen(f));
+    const visB = V2_BUDGET.filter((b) => colVis(b.f));
+
+    if (!kols.length) {
+      host.innerHTML = `<div class="kol-panel"><div class="kol-empty"><span class="material-symbols-outlined">groups</span><span>ยังไม่มี KOL${admin ? ' — กด "Assign KOL" หรือ "นำเข้า Excel"' : ""}</span></div></div>`;
+      return;
+    }
+
+    const money$ = (v) => "฿" + (Number(v) || 0).toLocaleString("en-US");
+    const num = (f, val) => `<input class="kol-in num" inputmode="numeric" data-f="${f}" data-money value="${val === "" || val == null ? "" : Number(val).toLocaleString("en-US")}" ${ro}/>`;
+    const txt = (f, val, cls = "kol-in") => `<input class="${cls}" data-f="${f}" value="${esc(val ?? "")}" ${ro}/>`;
+    const eye = (k, f) => admin ? `<button class="kol-eye ${cellOpen(k, f) ? "on" : ""}" data-eye="${f}" title="โชว์/ซ่อนตอนส่งลูกค้า"><span class="material-symbols-outlined text-[16px]">${cellOpen(k, f) ? "visibility" : "visibility_off"}</span></button>` : "";
+    const platCell = (k, p) => {
+      const url = ((k.links || {})[p.k] || "").trim();
+      const a2 = url ? `<a class="kol-plat" href="${esc(url)}" target="_blank" rel="noopener" title="${p.label} — เปิดโพสต์" style="color:${p.color}"><i class="${p.icon}"></i></a>` : `<span style="color:#d4cebe">—</span>`;
+      return a2;
+    };
+
+    const rowHtml = (k, i) => `<tr data-i="${i}">
+      <td class="kol-rownum">${i + 1}</td>
+      <td>${txt("kol_type", k.kol_type, "kol-in sm")}</td>
+      <td class="kol-name">${k.influencer_id ? `<a href="#/influencer/${k.influencer_id}">${esc(nameOf(k))}</a>` : esc(nameOf(k))}</td>
+      <td class="kol-c">${follOf(k) !== "" ? esc(String(follOf(k))) : '<span style="color:#d4cebe">—</span>'}</td>
+      <td>${txt("content_type", k.content_type, "kol-in sm")}</td>
+      <td><button class="kol-cellbtn" data-sow-edit><span class="material-symbols-outlined text-[15px]">checklist</span>${(k.sow || []).length || "+"}</button></td>
+      <td>${txt("product_focus", k.product_focus, "kol-in md")}</td>
+      <td><input class="kol-in dt" type="date" data-f="post_date" value="${esc(k.post_date || "")}" ${ro}/></td>
+      ${V2_PLATFORMS.map((p) => `<td class="kol-c">${platCell(k, p)}</td>`).join("")}
+      ${admin ? `<td><button class="kol-cellbtn" data-links-edit title="แก้ลิงก์ทุกแพลตฟอร์ม"><span class="material-symbols-outlined text-[15px]">link</span></button></td>` : ""}
+      ${visB.map(({ f }) => admin
+        ? `<td><div class="kol-bcell">${num(f, k[f])}${eye(k, f)}</div></td>`
+        : (cellOpen(k, f) ? `<td><div class="kol-bcell">${num(f, k[f])}</div></td>` : `<td><div class="kol-bcell" style="justify-content:center;color:#bcb5a4">—</div></td>`)).join("")}
+      <td>${txt("gencode", k.gencode, "kol-in sm")}</td>
+      <td><button class="kol-cellbtn" data-cond-edit title="เงื่อนไข">${(k.condition || k.conditions) ? '<span class="material-symbols-outlined text-[15px]" style="color:#e1121c">sticky_note_2</span>' : '<span class="material-symbols-outlined text-[15px]">add</span>'}</button></td>
+      <td><button class="kol-cellbtn" data-media-edit>${(k.media || []).length ? `${(k.media || []).length}` : '<span class="material-symbols-outlined text-[15px]">image</span>'}</button></td>
+      ${admin ? `<td><button class="kol-remove" data-remove title="ลบ"><span class="material-symbols-outlined text-[18px]">delete</span></button></td>` : ""}
+    </tr>`;
+
+    // Group by Month (top), then Tier (sub, like v1) — standalone rows fall back to KOLs Type.
+    const byMonth = {};
+    kols.forEach((k, i) => { const m = k.month || "—"; (byMonth[m] = byMonth[m] || []).push(i); });
+    const TIER_ORDER = ["Mega", "Macro", "Mid-Tier", "Micro", "Nano"];
+    const subOf = (k) => tierOf(k) || k.kol_type || "—";
+    const sortIdx = (idxs) => idxs.slice().sort((x, y) => {
+      const d = (Number(kols[y].kol_price) || 0) - (Number(kols[x].kol_price) || 0);
+      return kolSortDir === "desc" ? d : -d;
+    });
+    const monthKeys = Object.keys(byMonth);
+    const colspan = 11 + V2_PLATFORMS.length + (admin ? 1 : 0) + visB.length + (admin ? 1 : 0);
+    const body = monthKeys.map((m) => {
+      const idxs = byMonth[m];
+      const subs = {};
+      idxs.forEach((i) => { const s = subOf(kols[i]); (subs[s] = subs[s] || []).push(i); });
+      const subKeys = TIER_ORDER.filter((t) => subs[t]).concat(Object.keys(subs).filter((s) => !TIER_ORDER.includes(s)).sort());
+      const monthHead = `<tr class="kol-group kol-group-month"><td colspan="${colspan}">📅 ${esc(m === "—" ? "ไม่ระบุเดือน" : m)}<span class="kol-gcount">${idxs.length} KOL</span></td></tr>`;
+      const subRows = subKeys.map((s) => {
+        const head = V2_TIERS.includes(s) ? `<span class="tier-chip tier-${tierCls(s)}">${esc(s)}</span>` : `<span class="kol-gname">${esc(s)}</span>`;
+        return `<tr class="kol-group"><td colspan="${colspan}">${head}<span class="kol-gcount">${subs[s].length}</span></td></tr>${sortIdx(subs[s]).map((i) => rowHtml(kols[i], i)).join("")}`;
+      }).join("");
+      return monthHead + subRows;
+    }).join("");
+
+    const tot = (f) => kols.reduce((s, k) => s + (admin || cellOpen(k, f) ? (Number(k[f]) || 0) : 0), 0);
+    const grand = V2_BUDGET.reduce((s, b) => s + (colVis(b.f) ? tot(b.f) : 0), 0);
+    const bEye = (f) => admin ? `<button class="kol-eye ${bvis(f) ? "on" : ""}" data-budget-eye="${f}"><span class="material-symbols-outlined text-[16px]">${bvis(f) ? "visibility" : "visibility_off"}</span></button>` : "";
+    const foot = (admin || visB.length) ? `<div class="kol-foot"><div class="kol-foot-items">
+      ${V2_BUDGET.filter((b) => admin || colVis(b.f)).map((b) => `<div class="kol-tot ${admin && !bvis(b.f) ? "is-cust-hidden" : ""}"><span class="l">${b.th}</span><span class="kol-tot-vrow"><span class="v" data-tot="${b.f}">${money$(tot(b.f))}</span>${bEye(b.f)}</span></div>`).join("")}
+      <div class="kol-tot kol-tot-budget"><span class="l">Total Budget</span><span class="kol-tot-vrow"><span class="v" data-tot="grand">${money$(grand)}</span></span></div>
+    </div></div>` : "";
+
+    const sortBtn = `<button class="kol-sort" data-sort title="เรียงงบ มาก↔น้อย"><span class="material-symbols-outlined text-[16px]">${kolSortDir === "desc" ? "arrow_downward" : "arrow_upward"}</span>KOL Price</button>`;
+    host.innerHTML = `<div class="kol-panel">
+      <div class="kol-toolbar">${sortBtn}</div>
+      <div class="kol-wrap"><table class="kol-table"><thead><tr>
+        <th>#</th><th>Type</th><th>KOL Name</th><th>Follower</th><th>Content</th><th>SOW</th><th>Product Focus</th><th>Post Date</th>
+        ${V2_PLATFORMS.map((p) => `<th title="${p.label}"><i class="${p.icon}"></i></th>`).join("")}${admin ? "<th>Links</th>" : ""}
+        ${visB.map((b) => `<th>${b.th}</th>`).join("")}<th>Gencode</th><th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
+      </tr></thead><tbody>${body}</tbody></table></div>${foot}</div>`;
+
+    host.querySelector("[data-sort]")?.addEventListener("click", () => { kolSortDir = kolSortDir === "desc" ? "asc" : "desc"; renderKolTableV2(host, a, roster); });
+
+    host.querySelectorAll("[data-budget-eye]").forEach((b) => b.addEventListener("click", () => {
+      const f = b.getAttribute("data-budget-eye"); a.budget_show = a.budget_show || {};
+      a.budget_show[f] = a.budget_show[f] === false; renderKolTableV2(host, a, roster);
+      saveAsset(a.id, { budget_show: a.budget_show }, a).catch((e) => toast(e.message, "err"));
+    }));
+
+    if (!admin) return;
+    let timer; const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveKols(a, a.kols).catch((e) => toast(e.message, "err")), 600); };
+    const retotal = () => { host.querySelectorAll("[data-tot]").forEach((eln) => { const f = eln.getAttribute("data-tot"); eln.textContent = money$(f === "grand" ? V2_BUDGET.reduce((s, b) => s + tot(b.f), 0) : tot(f)); }); };
+    host.querySelectorAll("[data-f]").forEach((inpEl) => {
+      const f = inpEl.getAttribute("data-f"); const isMoney = inpEl.hasAttribute("data-money");
+      inpEl.addEventListener("input", () => {
+        const i = +inpEl.closest("tr").dataset.i;
+        if (isMoney) { const digits = inpEl.value.replace(/[^\d]/g, ""); a.kols[i][f] = digits === "" ? "" : Number(digits); retotal(); persist(); return; }
+        a.kols[i][f] = inpEl.value; persist();
+      });
+      if (isMoney) {
+        inpEl.addEventListener("focus", () => { const v = a.kols[+inpEl.closest("tr").dataset.i][f]; inpEl.value = (v === "" || v == null) ? "" : String(v); });
+        inpEl.addEventListener("blur", () => { const v = a.kols[+inpEl.closest("tr").dataset.i][f]; inpEl.value = (v === "" || v == null) ? "" : Number(v).toLocaleString("en-US"); });
+      }
+    });
+    host.querySelectorAll("[data-eye]").forEach((b) => b.addEventListener("click", () => {
+      const i = +b.closest("tr").dataset.i, f = b.getAttribute("data-eye"), k = a.kols[i];
+      k.show = k.show || {}; k.show[f] = k.show[f] === false; renderKolTableV2(host, a, roster); persist();
+    }));
+    host.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
+      const i = +b.closest("tr").dataset.i;
+      if (!confirm(`ลบ ${nameOf(a.kols[i])} ออกจากแคมเปญ?`)) return;
+      a.kols.splice(i, 1); await saveKols(a, a.kols); renderKolTableV2(host, a, roster);
+    }));
+    host.querySelectorAll("[data-sow-edit]").forEach((b) => b.addEventListener("click", () => openKolSowModal(a, +b.closest("tr").dataset.i, roster, host)));
+    host.querySelectorAll("[data-cond-edit]").forEach((b) => b.addEventListener("click", () => openKolCondModal(a, +b.closest("tr").dataset.i, roster, host)));
+    host.querySelectorAll("[data-media-edit]").forEach((b) => b.addEventListener("click", () => openKolMediaModal(a, +b.closest("tr").dataset.i, roster, host)));
+    host.querySelectorAll("[data-links-edit]").forEach((b) => b.addEventListener("click", () => openKolLinksModal(a, +b.closest("tr").dataset.i, roster, host)));
+  }
+
+  // Edit all per-platform links for one KOL (v2).
+  function openKolLinksModal(a, idx, roster, host) {
+    const k = a.kols[idx]; k.links = k.links || {};
+    const body = V2_PLATFORMS.map((p) => `<label class="flex flex-col gap-1">${lbl(`<i class="${p.icon}" style="color:${p.color}"></i> ${p.label}`)}<input data-plat="${p.k}" class="${inpCls}" value="${esc(k.links[p.k] || "")}" placeholder="https://..."/></label>`).join("");
+    const m = modal("ลิงก์โพสต์ (แยกแพลตฟอร์ม)", "link", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
+    m.querySelector("[data-save]").addEventListener("click", async () => {
+      const links = {};
+      m.querySelectorAll("[data-plat]").forEach((inp) => { const v = inp.value.trim(); if (v) links[inp.getAttribute("data-plat")] = v; });
+      k.links = links;
+      try { await saveKols(a, a.kols); m.remove(); renderKolTableV2(host, a, roster); } catch (e) { toast(e.message, "err"); }
+    });
+  }
+
+  // Import KOLs from a "KOLs Confirmed" .xlsx → preview count → append.
+  function openImportKolModal(a) {
+    const m = modal("นำเข้า KOL จาก Excel", "upload_file", `
+      <div class="text-[13px] text-on-surface-variant">อัปโหลดไฟล์ฟอร์แมต <b>KOLs Confirmed</b> (.xlsx) — ระบบจะดึงชื่อ · SOW · ลิงก์แต่ละแพลตฟอร์ม (แนบอัตโนมัติ) · งบ ให้เลย</div>
+      <button data-pick class="px-md py-2 rounded-lg border border-outline-variant hover:bg-surface-container-low flex items-center gap-1 w-fit"><span class="material-symbols-outlined text-[18px]">upload_file</span>เลือกไฟล์ .xlsx</button>
+      <div id="imp-status" class="text-[13px]"></div>`,
+      `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-add class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary hover:bg-primary-container" disabled style="opacity:.5">เพิ่มเข้าแคมเปญ</button>`);
+    const status = m.querySelector("#imp-status"); const addBtn = m.querySelector("[data-add]");
+    let parsed = [];
+    m.querySelector("[data-pick]").addEventListener("click", () => {
+      const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".xlsx,.xlsm";
+      inp.addEventListener("change", async () => {
+        const file = inp.files && inp.files[0]; if (!file) return;
+        status.innerHTML = "⏳ กำลังอ่านไฟล์...";
+        try {
+          const fd = new FormData(); fd.append("file", file);
+          const res = await api("/assets/" + a.id + "/import-kols", { method: "POST", body: fd });
+          parsed = res.kols || [];
+          const withLinks = parsed.filter((k) => k.links && Object.keys(k.links).length).length;
+          status.innerHTML = `✅ อ่านได้ <b>${res.count}</b> KOL · มีลิงก์ ${withLinks} คน<br><span class="text-on-surface-variant text-[12px]">กด "เพิ่มเข้าแคมเปญ" เพื่อต่อท้าย KOL เดิม</span>`;
+          addBtn.disabled = false; addBtn.style.opacity = "1";
+        } catch (e) { status.innerHTML = `<span class="text-error">❌ ${esc(e.message)}</span>`; }
+      });
+      inp.click();
+    });
+    addBtn.addEventListener("click", async () => {
+      if (!parsed.length) return;
+      const kols = (a.kols || []).slice();
+      parsed.forEach((p) => kols.push({
+        influencer_id: null, name: p.name, kol_type: p.kol_type, followers: p.followers,
+        content_type: p.content_type, sow: p.sow || [], product_focus: p.product_focus,
+        post_date: p.post_date, month: p.month, tier: "", profile_link: p.profile_link,
+        links: p.links || {}, kol_price: p.kol_price, gencode_boosting: p.gencode_boosting,
+        cart_added: p.cart_added, buy_asset: p.buy_asset, outside_shooting: p.outside_shooting,
+        condition: p.condition, gencode: p.gencode, objective: "Awareness",
+        show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true },
+      }));
+      try { await saveKols(a, kols); toast(`นำเข้า ${parsed.length} KOL แล้ว`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
+    });
+  }
+
+  function renderKolTableV1(host, a, roster) {
     const admin = CA.canEdit(a);   // admin or a manager assigned to this campaign
     const kols = a.kols || [];
     const inf = (id) => roster.find((r) => r.id === id) || {};
@@ -250,9 +457,9 @@
       if (!ids.length) { m.remove(); return; }
       const kols = (a.kols || []).slice();
       ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
-        // Budget is entered per campaign in the table below — do NOT prefill from
-        // the influencer's Directory fee estimate (rate/gen_code start blank).
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", sow: [], product_focus: "", client_approved: "Pending", post_date: "", link: "", rate: 0, gen_code_price: 0, boosting_cost: 0, objective: "Awareness", period_from: "", period_to: "", conditions: "", caption: "", media: [], show: { rate: true, gen_code_price: true, boosting_cost: true } });
+        // v2 row shape (KOLs-Confirmed format). Budget starts blank — it is entered
+        // per campaign in the table, not prefilled from the Directory fee estimate.
+        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
       });
       try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
@@ -397,6 +604,7 @@ ${bvis("total") ? `<div class="item grand"><span class="l">Total Budget</span><s
     count: (a) => `${(a.kols || []).length} KOLS`,
     actions: (a) => [
       { icon: "checklist", label: "Manage SOW", onClick: () => openSowModal(a) },
+      { icon: "upload_file", label: "นำเข้า Excel", onClick: () => openImportKolModal(a) },
       { icon: "person_add", label: "Assign KOL", gold: true, onClick: () => openAssignKolModal(a, lastRoster) },
     ],
     render: async (host, a) => { lastRoster = await CA.roster(); renderKolTable(host, a, lastRoster); },

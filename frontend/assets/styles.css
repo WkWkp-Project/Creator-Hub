@@ -349,6 +349,13 @@ input.kol-in[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none;
 .kol-group td{ background:#f4f4f5; padding:8px 12px; border-top:1px solid #e8e8ea; border-bottom:1px solid #e8e8ea; }
 .kol-group:hover td{ background:#f4f4f5; }
 .kol-gcount{ color:#8a8a8f; font-weight:600; font-size:12px; margin-left:8px; }
+/* v2: month group header + budget sort toggle */
+.kol-group-month td{ background:#161616; color:#fff; font-weight:800; }
+.kol-group-month .kol-gcount{ color:#d4cebe; }
+.kol-toolbar{ display:flex; justify-content:flex-end; padding:8px 12px 0; }
+.kol-sort{ display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700; color:#6b6457;
+  background:#fff; border:1px solid #e3dfd5; border-radius:8px; padding:5px 10px; cursor:pointer; }
+.kol-sort:hover{ background:#f3f0e9; }
 
 /* Version-log modal */
 .ver-list{ display:flex; flex-direction:column; gap:8px; max-height:52vh; overflow:auto; }
