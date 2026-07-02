@@ -19,6 +19,7 @@
   // v2 (KOLs-Confirmed Excel format) is the active table; v1 kept as a fallback.
   let USE_V2 = true;
   let kolSortDir = "desc";   // budget high→low by default
+  let selectedKolRows = new Set();
   const renderKolTable = (host, a, roster) => (USE_V2 ? renderKolTableV2 : renderKolTableV1)(host, a, roster);
 
   const V2_PLATFORMS = [
@@ -36,13 +37,22 @@
     { f: "outside_shooting", th: "Outside" },
   ];
   const V2_TIERS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
+  const CHANNEL_ORDER = ["instagram", "tiktok", "youtube", "facebook", "twitter", "website"];
+  const primaryChannelLink = (person = {}) => {
+    const links = person.social_links || {};
+    const key = CHANNEL_ORDER.find((k) => (links[k] || "").trim());
+    return key ? links[key].trim() : "";
+  };
+  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
 
   function renderKolTableV2(host, a, roster) {
     const admin = CA.canEdit(a);
     const ro = admin ? "" : "disabled";
     const kols = a.kols || [];
+    selectedKolRows = new Set([...selectedKolRows].filter((i) => Number.isInteger(i) && i >= 0 && i < kols.length));
     const inf = (id) => roster.find((r) => r.id === id) || {};
     const nameOf = (k) => (k.influencer_id ? (inf(k.influencer_id).name || k.name) : k.name) || ("#" + (k.influencer_id || "?"));
+    const channelOf = (k) => (((hasOwn(k, "profile_link") ? k.profile_link : (k.channel_link || primaryChannelLink(inf(k.influencer_id)))) || "") + "").trim();
     const tierOf = (k) => (k.influencer_id ? inf(k.influencer_id).tier : k.tier) || "";
     const follOf = (k) => (k.influencer_id ? inf(k.influencer_id).followers : k.followers) ?? "";
     const tierCls = (t) => (V2_TIERS.includes(t) ? t : "custom");
@@ -69,11 +79,19 @@
       const a2 = url ? `<a class="kol-plat" href="${esc(url)}" target="_blank" rel="noopener" title="${p.label} — เปิดโพสต์" style="color:${p.color}"><i class="${p.icon}"></i></a>` : `<span style="color:#d4cebe">—</span>`;
       return a2;
     };
+    const nameCell = (k) => {
+      const name = k.influencer_id ? `<a href="#/influencer/${k.influencer_id}">${esc(nameOf(k))}</a>` : `<span>${esc(nameOf(k))}</span>`;
+      const url = channelOf(k);
+      const open = url ? `<a class="kol-channel-link" href="${esc(url)}" target="_blank" rel="noopener" title="Open channel"><span class="material-symbols-outlined text-[14px]">open_in_new</span></a>` : "";
+      const edit = admin ? `<button class="kol-channel-edit" data-channel-edit title="${url ? "Edit channel link" : "Add channel link"}"><span class="material-symbols-outlined text-[14px]">${url ? "edit" : "add_link"}</span></button>` : "";
+      return `<div class="kol-name-wrap"><span class="kol-name-main">${name}</span><span class="kol-channel-actions">${open}${edit}</span></div>`;
+    };
 
     const rowHtml = (k, i) => `<tr data-i="${i}">
+      ${admin ? `<td class="kol-sel"><input type="checkbox" class="kol-check" data-select-row value="${i}" ${selectedKolRows.has(i) ? "checked" : ""} title="Select row"/></td>` : ""}
       <td class="kol-rownum">${i + 1}</td>
       <td>${txt("kol_type", k.kol_type, "kol-in sm")}</td>
-      <td class="kol-name">${k.influencer_id ? `<a href="#/influencer/${k.influencer_id}">${esc(nameOf(k))}</a>` : esc(nameOf(k))}</td>
+      <td class="kol-name">${nameCell(k)}</td>
       <td class="kol-c">${follOf(k) !== "" ? esc(String(follOf(k))) : '<span style="color:#d4cebe">—</span>'}</td>
       <td>${txt("content_type", k.content_type, "kol-in sm")}</td>
       <td><button class="kol-cellbtn" data-sow-edit><span class="material-symbols-outlined text-[15px]">checklist</span>${(k.sow || []).length || "+"}</button></td>
@@ -100,7 +118,7 @@
       return kolSortDir === "desc" ? d : -d;
     });
     const monthKeys = Object.keys(byMonth);
-    const colspan = 11 + V2_PLATFORMS.length + (admin ? 1 : 0) + visB.length + (admin ? 1 : 0);
+    const colspan = 11 + V2_PLATFORMS.length + visB.length + (admin ? 3 : 0);
     const body = monthKeys.map((m) => {
       const idxs = byMonth[m];
       const subs = {};
@@ -123,10 +141,16 @@
     </div></div>` : "";
 
     const sortBtn = `<button class="kol-sort" data-sort title="เรียงงบ มาก↔น้อย"><span class="material-symbols-outlined text-[16px]">${kolSortDir === "desc" ? "arrow_downward" : "arrow_upward"}</span>KOL Price</button>`;
+    const selectedCount = [...selectedKolRows].filter((i) => kols[i]).length;
+    const bulkTools = admin ? `<div class="kol-bulk">
+      <span class="kol-bulk-count"><b data-selected-count>${selectedCount}</b> selected</span>
+      <button class="kol-bulk-btn" data-clear-selected ${selectedCount ? "" : "disabled"}><span class="material-symbols-outlined text-[15px]">backspace</span>Clear selection</button>
+      <button class="kol-bulk-btn danger" data-delete-selected ${selectedCount ? "" : "disabled"}><span class="material-symbols-outlined text-[15px]">delete</span>Delete selected</button>
+    </div>` : "";
     host.innerHTML = `<div class="kol-panel">
-      <div class="kol-toolbar">${sortBtn}</div>
+      <div class="kol-toolbar">${bulkTools}${sortBtn}</div>
       <div class="kol-wrap"><table class="kol-table"><thead><tr>
-        <th>#</th><th>Type</th><th>KOL Name</th><th>Follower</th><th>Content</th><th>SOW</th><th>Product Focus</th><th>Post Date</th>
+        ${admin ? `<th><input type="checkbox" class="kol-check" data-select-all title="Select all"/></th>` : ""}<th>#</th><th>Type</th><th>KOL Name</th><th>Follower</th><th>Content</th><th>SOW</th><th>Product Focus</th><th>Post Date</th>
         ${V2_PLATFORMS.map((p) => `<th title="${p.label}"><i class="${p.icon}"></i></th>`).join("")}${admin ? "<th>Links</th>" : ""}
         ${visB.map((b) => `<th>${b.th}</th>`).join("")}<th>Gencode</th><th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
       </tr></thead><tbody>${body}</tbody></table></div>${foot}</div>`;
@@ -142,6 +166,41 @@
     if (!admin) return;
     let timer; const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveKols(a, a.kols).catch((e) => toast(e.message, "err")), 600); };
     const retotal = () => { host.querySelectorAll("[data-tot]").forEach((eln) => { const f = eln.getAttribute("data-tot"); eln.textContent = money$(f === "grand" ? V2_BUDGET.reduce((s, b) => s + tot(b.f), 0) : tot(f)); }); };
+    const updateBulkState = () => {
+      selectedKolRows = new Set([...selectedKolRows].filter((i) => a.kols[i]));
+      const n = selectedKolRows.size;
+      const count = host.querySelector("[data-selected-count]");
+      if (count) count.textContent = String(n);
+      host.querySelectorAll("[data-clear-selected],[data-delete-selected]").forEach((b) => { b.disabled = n === 0; });
+      const all = host.querySelector("[data-select-all]");
+      if (all) { all.checked = n > 0 && n === a.kols.length; all.indeterminate = n > 0 && n < a.kols.length; }
+    };
+    host.querySelector("[data-select-all]")?.addEventListener("change", (e) => {
+      selectedKolRows = e.target.checked ? new Set(a.kols.map((_, i) => i)) : new Set();
+      host.querySelectorAll("[data-select-row]").forEach((inp) => { inp.checked = selectedKolRows.has(+inp.value); });
+      updateBulkState();
+    });
+    host.querySelectorAll("[data-select-row]").forEach((inp) => inp.addEventListener("change", () => {
+      const i = +inp.value;
+      if (inp.checked) selectedKolRows.add(i); else selectedKolRows.delete(i);
+      updateBulkState();
+    }));
+    host.querySelector("[data-clear-selected]")?.addEventListener("click", () => {
+      selectedKolRows.clear();
+      host.querySelectorAll("[data-select-row]").forEach((inp) => { inp.checked = false; });
+      updateBulkState();
+    });
+    host.querySelector("[data-delete-selected]")?.addEventListener("click", async () => {
+      const rows = [...selectedKolRows].filter((i) => a.kols[i]).sort((x, y) => y - x);
+      if (!rows.length) return;
+      if (!confirm(`Delete ${rows.length} selected KOL from this campaign?`)) return;
+      clearTimeout(timer);
+      rows.forEach((i) => a.kols.splice(i, 1));
+      selectedKolRows.clear();
+      await saveKols(a, a.kols);
+      renderKolTableV2(host, a, roster);
+    });
+    updateBulkState();
     host.querySelectorAll("[data-f]").forEach((inpEl) => {
       const f = inpEl.getAttribute("data-f"); const isMoney = inpEl.hasAttribute("data-money");
       inpEl.addEventListener("input", () => {
@@ -167,6 +226,7 @@
     host.querySelectorAll("[data-cond-edit]").forEach((b) => b.addEventListener("click", () => openKolCondModal(a, +b.closest("tr").dataset.i, roster, host)));
     host.querySelectorAll("[data-media-edit]").forEach((b) => b.addEventListener("click", () => openKolMediaModal(a, +b.closest("tr").dataset.i, roster, host)));
     host.querySelectorAll("[data-links-edit]").forEach((b) => b.addEventListener("click", () => openKolLinksModal(a, +b.closest("tr").dataset.i, roster, host)));
+    host.querySelectorAll("[data-channel-edit]").forEach((b) => b.addEventListener("click", () => openKolChannelModal(a, +b.closest("tr").dataset.i, roster, host)));
   }
 
   // Edit all per-platform links for one KOL (v2).
@@ -178,6 +238,22 @@
       const links = {};
       m.querySelectorAll("[data-plat]").forEach((inp) => { const v = inp.value.trim(); if (v) links[inp.getAttribute("data-plat")] = v; });
       k.links = links;
+      try { await saveKols(a, a.kols); m.remove(); renderKolTableV2(host, a, roster); } catch (e) { toast(e.message, "err"); }
+    });
+  }
+
+  function openKolChannelModal(a, idx, roster, host) {
+    const k = a.kols[idx];
+    const person = roster.find((r) => r.id === k.influencer_id) || {};
+    const who = person.name || k.name || "KOL";
+    const current = (((hasOwn(k, "profile_link") ? k.profile_link : (k.channel_link || primaryChannelLink(person))) || "") + "").trim();
+    const body = `<label class="flex flex-col gap-1">${lbl(`Channel link ของ ${esc(who)}`)}<input id="chl" class="${inpCls}" placeholder="https://..." value="${esc(current)}"/></label>`;
+    const m = modal("Channel Link", "alternate_email", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button><button data-clear class="px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Clear</button><button data-save class="px-md py-2 rounded-lg font-semibold bg-primary text-on-primary">Save</button>`);
+    const inp = m.querySelector("#chl"); inp.focus();
+    m.querySelector("[data-clear]").addEventListener("click", () => { inp.value = ""; });
+    m.querySelector("[data-save]").addEventListener("click", async () => {
+      k.profile_link = inp.value.trim();
+      delete k.channel_link;
       try { await saveKols(a, a.kols); m.remove(); renderKolTableV2(host, a, roster); } catch (e) { toast(e.message, "err"); }
     });
   }
@@ -459,7 +535,7 @@
       ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
         // v2 row shape (KOLs-Confirmed format). Budget starts blank — it is entered
         // per campaign in the table, not prefilled from the Directory fee estimate.
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", conditions: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
+        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", profile_link: primaryChannelLink(r), links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", conditions: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
       });
       try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
