@@ -7,12 +7,14 @@ Access model:
   - viewer  : sees (read-only) only campaigns assigned to them.
 """
 import io
+import re
 from datetime import datetime
 
 import openpyxl
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from rapidfuzz import fuzz
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -272,25 +274,122 @@ def update_drive_links(
 # ---- KOL Plan import from the "KOLs Confirmed" Excel format ----------------
 # Per-platform link columns carry a real hyperlink (the cell text is just "Link"),
 # so we read cell.hyperlink.target rather than the displayed value.
-_KOL_PLATFORM_COLS = {"J": "tiktok", "K": "instagram", "L": "facebook", "M": "lemon8", "N": "youtube"}
+_KOL_HEADER_MATCH_THRESHOLD = 95.0
+_KOL_PLATFORM_FIELDS = ("tiktok", "instagram", "facebook", "lemon8", "youtube")
+_KOL_FIXED_COLS = {
+    "month": 1, "kol_type": 2, "name": 3, "profile_link": 4, "followers": 5,
+    "content_type": 6, "sow": 7, "product_focus": 8, "post_date": 9,
+    "tiktok": 10, "instagram": 11, "facebook": 12, "lemon8": 13, "youtube": 14,
+    "kol_price": 16, "gencode_boosting": 17, "cart_added": 18, "buy_asset": 19,
+    "outside_shooting": 20, "condition": 21, "gencode": 22,
+}
+_KOL_IMPORT_HEADERS = {
+    "month": ("month", "campaign month", "period"),
+    "kol_type": ("kols type", "kol type", "creator type", "tier", "type"),
+    "name": ("kol name", "kols name", "kols/channel", "channel", "creator name", "creator", "influencer name", "name"),
+    "profile_link": ("profile link", "kol profile", "creator profile", "profile url", "profile"),
+    "followers": ("followers", "follower", "no. followers", "number of followers", "fan"),
+    "content_type": ("content type", "content format", "content"),
+    "sow": ("sow", "scope of work", "deliverable", "deliverables"),
+    "product_focus": ("product focus", "product", "focus product", "focus"),
+    "post_date": ("post date", "posting date", "publish date", "date"),
+    "tiktok": ("tiktok", "tik tok", "tiktok link", "tik tok link"),
+    "instagram": ("instagram", "ig", "instagram link", "ig link"),
+    "facebook": ("facebook", "fb", "facebook link", "fb link"),
+    "lemon8": ("lemon8", "lemon 8", "lemon8 link", "lemon 8 link"),
+    "youtube": ("youtube", "you tube", "youtube link", "yt", "yt link"),
+    "kol_price": ("kol price", "kol price thb", "kols price", "kols price thb", "price", "price thb", "rate", "fee"),
+    "gencode_boosting": (
+        "gencode boosting", "gencode/boosting", "gen code boosting",
+        "gencode boosting thb", "gencode boost", "gen code boost", "boosting",
+        "boosting cost", "boosting cost thb",
+    ),
+    "cart_added": ("cart added", "cart added thb", "add to cart", "cart"),
+    "buy_asset": ("buy asset", "buy asset thb", "asset buyout", "asset buy out", "buyout"),
+    "outside_shooting": ("outside shooting", "outside shooting thb", "outside", "shooting"),
+    "condition": ("condition", "conditions", "terms"),
+    "gencode": ("gencode", "gen code", "code"),
+}
+
+
+def _header_text(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _header_key(value) -> str:
+    return re.sub(r"[\W_]+", "", _header_text(value), flags=re.UNICODE)
+
+
+def _header_score(value, alias: str) -> float:
+    text = _header_text(value)
+    alias_text = _header_text(alias)
+    if not text or not alias_text:
+        return 0.0
+    if _header_key(text) == _header_key(alias_text):
+        return 100.0
+    return float(max(
+        fuzz.ratio(_header_key(text), _header_key(alias_text)),
+        fuzz.token_sort_ratio(text, alias_text),
+    ))
+
+
+def _best_kol_header(value) -> tuple[str | None, float]:
+    best_field, best_score = None, 0.0
+    for field, aliases in _KOL_IMPORT_HEADERS.items():
+        for alias in aliases:
+            score = _header_score(value, alias)
+            if score > best_score:
+                best_field, best_score = field, score
+    if best_score >= _KOL_HEADER_MATCH_THRESHOLD:
+        return best_field, best_score
+    return None, best_score
+
+
+def _map_kol_headers(ws) -> tuple[int | None, dict[str, int]]:
+    best_row, best_map, best_score = None, {}, 0.0
+    for row in range(1, min(ws.max_row, 12) + 1):
+        row_map: dict[str, int] = {}
+        row_scores: dict[str, float] = {}
+        for col in range(1, ws.max_column + 1):
+            field, score = _best_kol_header(ws.cell(row=row, column=col).value)
+            if not field:
+                continue
+            if score > row_scores.get(field, -1.0):
+                row_map[field] = col
+                row_scores[field] = score
+        if "name" not in row_map:
+            continue
+        score = (len(row_map) * 1000) + sum(row_scores.values())
+        if score > best_score:
+            best_row, best_map, best_score = row, row_map, score
+    return best_row, best_map
 
 
 def _parse_confirmed_kols(raw: bytes) -> list[dict]:
     wb = openpyxl.load_workbook(io.BytesIO(raw))
     ws = next((wb[s] for s in wb.sheetnames if "confirm" in s.lower() or "comfirm" in s.lower()), wb.active)
+    header_row, header_cols = _map_kol_headers(ws)
+    cols = header_cols or _KOL_FIXED_COLS
+    first_data_row = (header_row + 1) if header_row else 3
 
-    def val(letter, r):
-        v = ws[f"{letter}{r}"].value
+    def val(field, r):
+        col = cols.get(field)
+        if not col:
+            return None
+        v = ws.cell(row=r, column=col).value
         if isinstance(v, datetime):
             return v.strftime("%Y-%m-%d")
         return v
 
-    def link(letter, r):
-        c = ws[f"{letter}{r}"]
+    def link(field, r):
+        col = cols.get(field)
+        if not col:
+            return None
+        c = ws.cell(row=r, column=col)
         return c.hyperlink.target if c.hyperlink else None
 
-    def num(letter, r):
-        v = val(letter, r)
+    def num(field, r):
+        v = val(field, r)
         try:
             return float(v) if v not in (None, "-", "") else 0
         except (TypeError, ValueError):
@@ -298,26 +397,31 @@ def _parse_confirmed_kols(raw: bytes) -> list[dict]:
 
     rows: list[dict] = []
     cur_month = ""
-    for r in range(3, ws.max_row + 1):
-        name = val("C", r)
+    for r in range(first_data_row, ws.max_row + 1):
+        name = val("name", r)
         if not name or str(name).strip() in ("", "-"):
             continue
-        m = val("A", r)
+        m = val("month", r)
         if m:
             cur_month = str(m).strip()
-        links = {plat: _safe_url(link(L, r)) for L, plat in _KOL_PLATFORM_COLS.items() if _safe_url(link(L, r))}
-        sow_val = val("G", r)
-        prof = link("D", r) or (val("D", r) if val("D", r) not in ("-", None) else "")
+        links = {}
+        for plat in _KOL_PLATFORM_FIELDS:
+            raw_link = link(plat, r) or val(plat, r)
+            safe = _safe_url(raw_link)
+            if safe:
+                links[plat] = safe
+        sow_val = val("sow", r)
+        prof = link("profile_link", r) or (val("profile_link", r) if val("profile_link", r) not in ("-", None) else "")
         rows.append({
-            "month": cur_month, "kol_type": (val("B", r) or ""), "name": str(name).strip(),
-            "profile_link": _safe_url(prof), "followers": (val("E", r) or ""),
-            "content_type": (val("F", r) or ""),
+            "month": cur_month, "kol_type": (val("kol_type", r) or ""), "name": str(name).strip(),
+            "profile_link": _safe_url(prof), "followers": (val("followers", r) or ""),
+            "content_type": (val("content_type", r) or ""),
             "sow": [sow_val] if sow_val and sow_val != "-" else [],
-            "product_focus": (val("H", r) or ""), "post_date": (val("I", r) or ""),
+            "product_focus": (val("product_focus", r) or ""), "post_date": (val("post_date", r) or ""),
             "links": links,
-            "kol_price": num("P", r), "gencode_boosting": num("Q", r), "cart_added": num("R", r),
-            "buy_asset": num("S", r), "outside_shooting": num("T", r),
-            "condition": (val("U", r) or ""), "gencode": (val("V", r) or ""),
+            "kol_price": num("kol_price", r), "gencode_boosting": num("gencode_boosting", r), "cart_added": num("cart_added", r),
+            "buy_asset": num("buy_asset", r), "outside_shooting": num("outside_shooting", r),
+            "condition": (val("condition", r) or ""), "gencode": (val("gencode", r) or ""),
         })
     return rows
 

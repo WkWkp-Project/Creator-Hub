@@ -377,6 +377,55 @@ def test_content_asset_crud_and_drive_links():
     assert client.delete(f"/api/assets/{aid}").status_code == 204
 
 
+def test_confirmed_kols_import_matches_shuffled_headers():
+    from io import BytesIO
+
+    import openpyxl
+
+    from app.routers.content_asset import _parse_confirmed_kols
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "KOLs Confirmed"
+    headers = [
+        "KOL Price", "TikTok", "KOLs Type", "Post Date", "KOL Name",
+        "Product Focus", "SOW", "Month", "Profile Link", "Followers",
+        "Content Type", "Condition", "Gencode", "Gencode Boosting",
+        "Cart Added", "Buy Asset", "Outside Shooting",
+    ]
+    for col, header in enumerate(headers, 1):
+        ws.cell(row=2, column=col, value=header)
+    values = [
+        1200, "Link", "Macro", "2026-07-01", "Alice Creator",
+        "Serum", "1 video", "Jul 2026", "Profile", 50000,
+        "Video", "Paid after posted", "ALICE10", 300,
+        20, 150, 80,
+    ]
+    for col, value in enumerate(values, 1):
+        ws.cell(row=3, column=col, value=value)
+    ws.cell(row=3, column=2).hyperlink = "https://tiktok.com/@alice"
+    ws.cell(row=3, column=9).hyperlink = "https://example.com/alice"
+    buf = BytesIO()
+    wb.save(buf)
+
+    rows = _parse_confirmed_kols(buf.getvalue())
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"] == "Alice Creator"
+    assert row["month"] == "Jul 2026"
+    assert row["kol_type"] == "Macro"
+    assert row["profile_link"] == "https://example.com/alice"
+    assert row["links"] == {"tiktok": "https://tiktok.com/@alice"}
+    assert row["kol_price"] == 1200
+    assert row["gencode_boosting"] == 300
+    assert row["cart_added"] == 20
+    assert row["buy_asset"] == 150
+    assert row["outside_shooting"] == 80
+    assert row["condition"] == "Paid after posted"
+    assert row["gencode"] == "ALICE10"
+
+
 def test_members_brands_and_campaign_links():
     # member create + role validation
     bad = client.post("/api/members", json={"name": "X", "role": "superuser"})

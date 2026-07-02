@@ -207,6 +207,7 @@
 
   // ---- Import performance numbers (CSV exported from the ad back-office) ----
   const FIELD_LABEL = { reach: "Reach", impression: "Impressions", video_view: "Video View", likes: "Likes", comments: "Comments", share: "Share", saved: "Saved", repost: "Repost", link_click: "Traffic", lead: "Lead", sale: "Sale", ad_spend: "Ad Spend" };
+  const IMPORT_HEADER_MATCH_THRESHOLD = 95;
   const COLMAP = {
     kol: ["kol", "kols", "kols/channel", "channel", "name", "creator", "ชื่อ"],
     type: ["type", "media", "media type", "media_type", "format", "content type", "content", "ประเภท", "ประเภทสื่อ", "รูปแบบ", "สื่อ"],
@@ -218,7 +219,43 @@
     lead: ["lead", "leads"], sale: ["sale", "sales", "purchase", "purchases"],
     ad_spend: ["ad spend", "spend", "cost", "boost", "boosting"],
   };
-  const colKey = (h) => { const x = String(h || "").trim().toLowerCase(); for (const f in COLMAP) if (COLMAP[f].includes(x)) return f; return null; };
+  COLMAP.kol.push("kol name", "kols name", "creator name", "influencer name");
+  COLMAP.impression.push("total impression", "total impressions");
+  COLMAP.link_click.push("traffic click", "traffic clicks");
+  COLMAP.ad_spend.push("ad spend thb", "boosting cost", "boosting cost thb");
+  const headerText = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const headerKey = (v) => headerText(v).replace(/[^\p{L}\p{N}]+/gu, "");
+  function levScore(a, b) {
+    if (a === b) return 100;
+    if (!a || !b) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      }
+      prev = cur;
+    }
+    return ((Math.max(a.length, b.length) - prev[b.length]) / Math.max(a.length, b.length)) * 100;
+  }
+  const sortedHeader = (v) => headerText(v).split(/\s+/).filter(Boolean).sort().join(" ");
+  function headerScore(raw, alias) {
+    const rk = headerKey(raw), ak = headerKey(alias);
+    if (!rk || !ak) return 0;
+    if (rk === ak) return 100;
+    return Math.max(levScore(rk, ak), levScore(sortedHeader(raw), sortedHeader(alias)));
+  }
+  const colKey = (h) => {
+    let bestField = null, bestScore = 0;
+    for (const f in COLMAP) {
+      COLMAP[f].forEach((alias) => {
+        const score = headerScore(h, alias);
+        if (score > bestScore) { bestField = f; bestScore = score; }
+      });
+    }
+    return bestScore >= IMPORT_HEADER_MATCH_THRESHOLD ? bestField : null;
+  };
 
   function openImportModal(a) {
     const cols = ["KOL", "Type", ...Object.values(FIELD_LABEL)];
