@@ -9,8 +9,9 @@ Access model:
 import io
 from datetime import datetime
 
+import openpyxl
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -248,6 +249,83 @@ def update_drive_links(
     db.commit()
     db.refresh(obj)
     return obj
+
+
+# ---- KOL Plan import from the "KOLs Confirmed" Excel format ----------------
+# Per-platform link columns carry a real hyperlink (the cell text is just "Link"),
+# so we read cell.hyperlink.target rather than the displayed value.
+_KOL_PLATFORM_COLS = {"J": "tiktok", "K": "instagram", "L": "facebook", "M": "lemon8", "N": "youtube"}
+
+
+def _parse_confirmed_kols(raw: bytes) -> list[dict]:
+    wb = openpyxl.load_workbook(io.BytesIO(raw))
+    ws = next((wb[s] for s in wb.sheetnames if "confirm" in s.lower() or "comfirm" in s.lower()), wb.active)
+
+    def val(letter, r):
+        v = ws[f"{letter}{r}"].value
+        if isinstance(v, datetime):
+            return v.strftime("%Y-%m-%d")
+        return v
+
+    def link(letter, r):
+        c = ws[f"{letter}{r}"]
+        return c.hyperlink.target if c.hyperlink else None
+
+    def num(letter, r):
+        v = val(letter, r)
+        try:
+            return float(v) if v not in (None, "-", "") else 0
+        except (TypeError, ValueError):
+            return 0
+
+    rows: list[dict] = []
+    cur_month = ""
+    for r in range(3, ws.max_row + 1):
+        name = val("C", r)
+        if not name or str(name).strip() in ("", "-"):
+            continue
+        m = val("A", r)
+        if m:
+            cur_month = str(m).strip()
+        links = {plat: link(L, r) for L, plat in _KOL_PLATFORM_COLS.items() if link(L, r)}
+        sow_val = val("G", r)
+        prof = link("D", r) or (val("D", r) if val("D", r) not in ("-", None) else "")
+        rows.append({
+            "month": cur_month, "kol_type": (val("B", r) or ""), "name": str(name).strip(),
+            "profile_link": prof or "", "followers": (val("E", r) or ""),
+            "content_type": (val("F", r) or ""),
+            "sow": [sow_val] if sow_val and sow_val != "-" else [],
+            "product_focus": (val("H", r) or ""), "post_date": (val("I", r) or ""),
+            "links": links,
+            "kol_price": num("P", r), "gencode_boosting": num("Q", r), "cart_added": num("R", r),
+            "buy_asset": num("S", r), "outside_shooting": num("T", r),
+            "condition": (val("U", r) or ""), "gencode": (val("V", r) or ""),
+        })
+    return rows
+
+
+@router.post("/{asset_id}/import-kols")
+async def import_kols(
+    asset_id: int,
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Parse an uploaded 'KOLs Confirmed' .xlsx and RETURN the KOL rows (preview).
+    The client appends/saves them — this endpoint does not mutate the campaign."""
+    obj = db.get(ContentAsset, asset_id)
+    if not obj or not _can_read(user, obj):
+        raise HTTPException(404, "Content asset not found")
+    if not _can_edit(user, obj):
+        raise HTTPException(403, "คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (นำเข้าไม่ได้)")
+    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "รองรับเฉพาะไฟล์ .xlsx")
+    raw = await file.read()
+    try:
+        kols = _parse_confirmed_kols(raw)
+    except Exception as e:  # noqa: BLE001 — surface a friendly parse error
+        raise HTTPException(400, f"อ่านไฟล์ไม่สำเร็จ: {e}")
+    return {"count": len(kols), "kols": kols}
 
 
 @router.delete("/{asset_id}", status_code=204)
