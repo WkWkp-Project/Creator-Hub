@@ -417,6 +417,7 @@ def test_confirmed_kols_import_matches_shuffled_headers():
     assert row["kol_type"] == "Macro"
     assert row["profile_link"] == "https://example.com/alice"
     assert row["links"] == {"tiktok": "https://tiktok.com/@alice"}
+    assert row["sow"] == ["1 video"]
     assert row["kol_price"] == 1200
     assert row["gencode_boosting"] == 300
     assert row["cart_added"] == 20

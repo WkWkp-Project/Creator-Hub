@@ -286,16 +286,22 @@
     addBtn.addEventListener("click", async () => {
       if (!parsed.length) return;
       const kols = (a.kols || []).slice();
-      parsed.forEach((p) => kols.push({
-        influencer_id: null, name: p.name, kol_type: p.kol_type, followers: p.followers,
-        content_type: p.content_type, sow: p.sow || [], product_focus: p.product_focus,
-        post_date: p.post_date, month: p.month, tier: "", profile_link: p.profile_link,
-        links: p.links || {}, kol_price: p.kol_price, gencode_boosting: p.gencode_boosting,
-        cart_added: p.cart_added, buy_asset: p.buy_asset, outside_shooting: p.outside_shooting,
-        condition: p.condition, conditions: p.condition, gencode: p.gencode, objective: "Awareness",
-        show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true },
-      }));
-      try { await saveKols(a, kols); toast(`นำเข้า ${parsed.length} KOL แล้ว`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
+      const sowOptions = new Set(a.sow_options || []);
+      parsed.forEach((p) => {
+        const importedSow = Array.isArray(p.sow) ? p.sow : (p.sow ? [p.sow] : []);
+        importedSow.forEach((s) => { const v = String(s || "").trim(); if (v) sowOptions.add(v); });
+        kols.push({
+          influencer_id: null, name: p.name, kol_type: p.kol_type, followers: p.followers,
+          content_type: p.content_type, sow: importedSow, product_focus: p.product_focus,
+          post_date: p.post_date, month: p.month, tier: "", profile_link: p.profile_link,
+          links: p.links || {}, kol_price: p.kol_price, gencode_boosting: p.gencode_boosting,
+          cart_added: p.cart_added, buy_asset: p.buy_asset, outside_shooting: p.outside_shooting,
+          condition: p.condition, conditions: p.condition, gencode: p.gencode, objective: "Awareness",
+          show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true },
+        });
+      });
+      a.sow_options = [...sowOptions];
+      try { a.kols = kols; await saveAsset(a.id, { kols, sow_options: a.sow_options }, a); toast(`นำเข้า ${parsed.length} KOL แล้ว`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
   }
 
