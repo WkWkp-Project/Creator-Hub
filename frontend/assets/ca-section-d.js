@@ -32,6 +32,7 @@
     return t.includes("video") ? "วิดีโอ" : t.includes("album") ? "อัลบัม" : "ภาพนิ่ง";
   };
   const fmtN = (n) => (n === "" || n == null) ? "" : Number(n).toLocaleString("en-US");
+  const fmtMoney = (n) => N(n) ? "฿" + fmtN(n) : "—";
   const hasData = (m) => m && Object.values(m).some((v) => N(v) > 0);
 
   let expanded = false, curAsset = null, curHost = null, curRoster = [];
@@ -41,6 +42,31 @@
   const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || N((k.metrics || {}).followers);
   const tierOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).tier || k.tier || "";
   const tierChip = (k) => { const t = tierOf(k); return t ? `<span class="tier-chip tier-${["Nano", "Micro", "Mid-Tier", "Macro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>` : "—"; };
+  const totalsFor = (items) => {
+    const totals = { followers: 0, engagement: 0, conversions: 0, ad_spend: 0 };
+    COLS.forEach((c) => { totals[c.k] = 0; });
+    (items || []).forEach((k) => {
+      const m = k.metrics || {};
+      totals.followers += N(followersOf(k));
+      COLS.forEach((c) => { totals[c.k] += N(m[c.k]); });
+      totals.engagement += engagement(m);
+      totals.conversions += conversions(m);
+      totals.ad_spend += N(k.boosting_cost);
+    });
+    return totals;
+  };
+  const totalCellsHtml = (totals, label = "รวม") => `<tr class="d-total-row" style="background:#fff7f7;font-weight:700">
+    <td class="kol-rownum">Σ</td>
+    <td class="kol-name" style="color:#e1121c">${esc(label)}</td>
+    <td class="c">—</td>
+    <td class="c">—</td>
+    <td class="c">—</td>
+    <td class="n">${fmtN(totals.followers)}</td>
+    ${COLS.map((c) => `<td class="n">${fmtN(totals[c.k])}</td>`).join("")}
+    <td class="n">${fmtN(totals.engagement)}</td>
+    <td class="n">${fmtN(totals.conversions)}</td>
+    <td class="n">${fmtMoney(totals.ad_spend)}</td>
+  </tr>`;
 
   // Sortable columns (every header is clickable to toggle asc/desc).
   const SORT_COLS = [
@@ -75,7 +101,8 @@
   }).map((k) => ({ k }));
 
   function tableHtml(a) {
-    const rows = ranked(a).map((x, n) => {
+    const list = ranked(a);
+    const rows = list.map((x, n) => {
       const m = x.k.metrics || {};
       const paid = N(x.k.boosting_cost) > 0;
       return `<tr>
@@ -88,15 +115,18 @@
         ${COLS.map((c) => `<td class="n">${fmtN(m[c.k]) || "—"}</td>`).join("")}
         <td class="n"><b>${fmtN(engagement(m)) || "—"}</b></td>
         <td class="n"><b>${fmtN(conversions(m)) || "—"}</b></td>
-        <td class="n">${N(x.k.boosting_cost) ? "฿" + fmtN(x.k.boosting_cost) : "—"}</td>
+        <td class="n">${fmtMoney(x.k.boosting_cost)}</td>
       </tr>`;
     }).join("");
+    const totals = totalsFor(list.map((x) => x.k));
+    const foot = list.length ? `<tfoot>${totalCellsHtml(totals)}</tfoot>` : "";
     const colspan = SORT_COLS.length + 1;
     const arrow = (key) => sortKey === key ? `<span class="d-arrow">${sortDir === "asc" ? "▲" : "▼"}</span>` : `<span class="d-arrow d-arrow-dim">↕</span>`;
     const heads = SORT_COLS.map((c) => `<th class="d-sort ${c.cls || ""}${sortKey === c.key ? " d-sort-on" : ""}" data-sort="${c.key}">${c.label}${arrow(c.key)}</th>`).join("");
     return `<div class="kol-wrap"><table class="kol-table perf-table d-table">
       <thead><tr><th>#</th>${heads}</tr></thead>
       <tbody>${rows || `<tr><td colspan="${colspan}" style="text-align:center;padding:24px;color:#8a8a8f">ยังไม่มี KOL</td></tr>`}</tbody>
+      ${foot}
     </table></div>`;
   }
 
@@ -135,8 +165,9 @@
       const m = x.k.metrics || {};
       return `<tr><td class="c">${n + 1}</td><td class="b">${esc(nameOf(x.k))}</td><td class="c">${esc(tierOf(x.k)) || "—"}</td><td class="c">${ctype(x.k)}</td><td class="c">${N(x.k.boosting_cost) > 0 ? "Paid" : "Organic"}</td><td class="n">${f(followersOf(x.k))}</td>${COLS.map((c) => `<td class="n">${f(m[c.k])}</td>`).join("")}<td class="n">${f(engagement(m))}</td><td class="n">${f(conversions(m))}</td><td class="n">${N(x.k.boosting_cost) ? "฿" + f(x.k.boosting_cost) : "—"}</td></tr>`;
     }).join("");
+    const totals = totalsFor(list.map((x) => x.k));
     return `<h2><span class="em">D.</span>ผลรวมทุก KOL <span style="color:#8a8a8f;font-weight:600;font-size:13px">· ${list.length} KOL</span></h2>
-<div class="panel"><table><thead><tr><th>#</th><th>KOL</th><th>Tier</th><th>Type</th><th>Source</th><th class="n">Followers</th>${COLS.map((c) => `<th class="n">${c.label}</th>`).join("")}<th class="n">Engagement</th><th class="n">Conversions</th><th class="n">Ad Spend</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+<div class="panel"><table><thead><tr><th>#</th><th>KOL</th><th>Tier</th><th>Type</th><th>Source</th><th class="n">Followers</th>${COLS.map((c) => `<th class="n">${c.label}</th>`).join("")}<th class="n">Engagement</th><th class="n">Conversions</th><th class="n">Ad Spend</th></tr></thead><tbody>${rows}</tbody><tfoot>${totalCellsHtml(totals)}</tfoot></table></div>`;
   }
 
   CA.register({
