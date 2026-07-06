@@ -17,7 +17,9 @@
   if (!CH) { console.error("contentasset.js: CH bridge missing"); return; }
   const { route, api, el, esc, toast, isAdmin, render, fmtNum, uploadFile, mediaSrc } = CH;
 
-  const STATUS_LABEL = { draft: "Draft", active: "Active", paused: "Paused", completed: "Completed" };
+  const STATUS_LABEL = { draft: "Draft", active: "Active", paused: "Paused", completed: "Completed", done: "Done", success: "Success" };
+  const CLOSED_STATUS = new Set(["completed", "complete", "done", "success", "succeeded", "cancelled"]);
+  const isClosedStatus = (s) => CLOSED_STATUS.has(String(s || "").trim().toLowerCase());
 
   // Section A is a fixed 3-slot template; stored input_files fill each slot in order.
   // Kept in core because the campaign LIST cards summarise the linked-file count.
@@ -183,6 +185,7 @@
       </div>`;
     };
     const deadlineBadge = (a) => {
+      if (isClosedStatus(a.status)) return "";
       const kols = a.kols || [];
       if (!kols.length) return "";
       const today = new Date(); today.setHours(0, 0, 0, 0);

@@ -184,7 +184,7 @@ body{ font-family:'Prompt','Poppins',sans-serif; }
 .ca-cards{ display:grid; grid-template-columns:repeat(4,1fr); gap:18px; }
 .ca-cards.ca-cards-3{ grid-template-columns:repeat(3,minmax(0,1fr)); }
 .ca-card{ border:1px solid #e4e4e7; border-radius:8px; background:#fff; overflow:hidden; display:flex; flex-direction:column; }
-.ca-card-head{ padding:14px 14px 12px; }
+.ca-card-head{ padding:14px 14px 12px; flex:1; }
 .ca-num{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:24px;
   border-radius:5px; color:#fff; font-family:'Prompt','Poppins',sans-serif; font-weight:700; font-size:13px; }
 .ca-card-title{ font-weight:700; font-size:15px; margin-top:10px; }
@@ -243,7 +243,7 @@ body{ font-family:'Prompt','Poppins',sans-serif; }
 .ca-viewbtn:hover{ background:#f4f4f5; border-color:#e1121c; }
 
 /* List-card footer (campaign list) keeps the simple split layout */
-.ca-card-foot{ display:flex; border-top:1px solid #e4e4e7; }
+.ca-card-foot{ display:flex; border-top:1px solid #e4e4e7; margin-top:auto; }
 .ca-card-foot button, .ca-card-foot span{ flex:1; padding:11px; font-size:13px; font-weight:600; text-align:center; }
 .ca-view{ background:#fff; border:0; border-right:1px solid #e4e4e7; cursor:pointer; color:#1a1a1a; }
 .ca-view:hover{ background:#f4f4f5; }
@@ -443,6 +443,12 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 .sb-btn-outline:hover{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.4); }
 .sb-btn-ghost{ background:transparent; color:#c4c4c9; border:1px solid rgba(255,255,255,.12); }
 .sb-btn-ghost:hover{ background:rgba(255,255,255,.06); color:#fff; }
+.sb-tools{ display:flex; flex-direction:column; gap:2px; padding:0 2px 12px; }
+.sb-tool-link{ display:flex; align-items:center; gap:8px; width:100%; border:0; background:transparent; color:#c4c4c9;
+  border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; text-align:left; cursor:pointer; }
+.sb-tool-link .material-symbols-outlined{ font-size:18px; color:#8a8a8f; }
+.sb-tool-link:hover{ color:#fff; background:rgba(255,255,255,.06); }
+.sb-tool-link:hover .material-symbols-outlined{ color:#fff; }
 .sb-footer{ border-top:1px solid #2e2e33; }
 .nav-link{ color:#c4c4c9; }
 .nav-link:hover{ color:#fff; background:rgba(255,255,255,.07); }

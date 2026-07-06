@@ -35,6 +35,9 @@
   };
 
   // Social platform link icons (Font Awesome brands) — used in cards + profile.
+  const CLOSED_CAMPAIGN_STATUSES = new Set(["completed", "complete", "done", "success", "succeeded", "cancelled"]);
+  const isClosedCampaignStatus = (status) => CLOSED_CAMPAIGN_STATUSES.has(String(status || "").trim().toLowerCase());
+
   const SOCIAL_META = {
     instagram: { icon: "fa-brands fa-instagram", label: "Instagram", color: "#E1306C" },
     tiktok:    { icon: "fa-brands fa-tiktok",    label: "TikTok",    color: "#010101" },
@@ -520,11 +523,12 @@
     let pending = 0, overdue = 0; const attention = [];
     items.forEach((a) => {
       let ao = 0, as_ = 0;
+      const closed = isClosedCampaignStatus(a.status);
       (a.kols || []).forEach((k) => {
         if (k.client_approved === "Pending") pending++;
-        if (k.client_approved !== "Approve") { const d = parse(k.post_date) || parse(k.period_to); if (d) { const dd = Math.round((d - today) / 86400000); if (dd < 0) { overdue++; ao++; } else if (dd <= 7) as_++; } }
+        if (!closed && k.client_approved !== "Approve") { const d = parse(k.post_date) || parse(k.period_to); if (d) { const dd = Math.round((d - today) / 86400000); if (dd < 0) { overdue++; ao++; } else if (dd <= 7) as_++; } }
       });
-      if (ao || as_) attention.push({ a, overdue: ao, soon: as_ });
+      if (!closed && (ao || as_)) attention.push({ a, overdue: ao, soon: as_ });
     });
     const active = items.filter((a) => a.status === "active").length;
     const money = (n) => "฿" + Math.round(n || 0).toLocaleString("en-US");
@@ -1617,7 +1621,7 @@
   }
 
   // ---------- global wiring ----------
-  document.addEventListener("click", (e) => {
+  document.addEventListener("click", async (e) => {
     // password show/hide toggle
     const eye = e.target.closest("[data-eye]");
     if (eye) {
@@ -1643,6 +1647,21 @@
       const tokenQ = auth?.token ? "&token=" + encodeURIComponent(auth.token) : "";
       window.open(API + "/influencers/export?format=xlsx" + tokenQ, "_blank");
       toast("Exporting roster to Excel…");
+    }
+    if (a.dataset.action === "backup-json") {
+      try {
+        const r = await api("/backup", { method: "POST" });
+        const tokenQ = auth?.token ? "?token=" + encodeURIComponent(auth.token) : "";
+        window.open(API + "/backup/" + encodeURIComponent(r.filename) + "/download" + tokenQ, "_blank");
+        toast(`Backup .json created (${r.counts.influencers} influencers)`);
+      } catch (e) { toast(e.message, "err"); }
+    }
+    if (a.dataset.action === "restore-json") {
+      if (!confirm("Restore from the latest .json backup?\\nCurrent data will be replaced after the system snapshots it first.")) return;
+      try {
+        const r = await api("/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+        toast(`Restored latest .json: influencers ${r.counts.influencers}, campaigns ${r.counts.campaigns}`);
+      } catch (e) { toast(e.message, "err"); }
     }
   });
 
