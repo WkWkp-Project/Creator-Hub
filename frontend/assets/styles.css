@@ -35,6 +35,10 @@ body{ font-family:'Prompt','Poppins',sans-serif; }
 .ca-overhead .ca-title{ flex:1 1 auto; min-width:0; }
 .ca-overhead .ca-actions{ margin-left:auto; }
 
+.login-brand-mark{ display:flex; justify-content:center; align-items:center; min-height:54px; margin-bottom:4px; }
+.login-brand-mark img{ display:block; width:min(240px, 82%); height:auto; object-fit:contain; }
+.top-brand-logo{ display:block; width:150px; max-width:36vw; height:34px; object-fit:contain; object-position:left center; }
+
 /* Redesigned summary — soft single card, no hard dividers */
 .ca-summary{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px 30px;
   background:#fff; border:1px solid #ececec; border-radius:16px; padding:26px 30px;

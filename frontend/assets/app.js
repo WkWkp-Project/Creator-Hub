@@ -1706,10 +1706,8 @@
     const overlay = el(`
       <div id="login-overlay" class="fixed inset-0 z-[100] bg-surface flex items-center justify-center p-md">
         <div class="w-full max-w-sm bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-2 p-xl flex flex-col gap-md">
-          <div class="flex items-center gap-sm">
-            <div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center"><span class="material-symbols-outlined text-on-primary">hub</span></div>
-            <div><div class="text-[22px] font-black text-primary font-poppins leading-none">Creator Hub</div>
-            <div class="text-[12px] text-on-surface-variant font-semibold tracking-wide">Enterprise Management</div></div>
+          <div class="login-brand-mark">
+            <img src="./assets/influ-logo.png?v=1" alt="Influencer" />
           </div>
           <h1 class="text-[20px] font-semibold mt-sm">เข้าสู่ระบบ</h1>
           ${message ? `<div class="text-[13px] text-error bg-error-container/40 rounded-lg px-sm py-2">${esc(message)}</div>` : ""}
