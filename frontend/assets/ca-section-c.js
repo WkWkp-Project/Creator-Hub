@@ -9,7 +9,8 @@
  *                 ad spend = the KOL's Boosting cost from Section B
  *
  * The 3 media-type boxes (Image / Album / Video) re-rank live and show Top 3.
- * Metrics are stored on each KOL row (kols[i].metrics) — no schema change. */
+ * New imports are stored in asset.performance_results so one creator can have
+ * separate image / album / video results without duplicating Section B budgets. */
 (() => {
   "use strict";
   const CA = window.CA;
@@ -82,6 +83,9 @@
   const fmtN = (n) => (n === "" || n == null) ? "" : Number(n).toLocaleString("en-US");
   const baht = (n, dp) => "฿" + (Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: dp });
   const hasData = (m) => m && Object.values(m).some((v) => N(v) > 0);
+  const hasPerfLayer = (a) => Array.isArray(a.performance_results) && a.performance_results.length > 0;
+  const perfItems = (a) => hasPerfLayer(a) ? a.performance_results : (a.kols || []);
+  const perfPatchKey = (a) => hasPerfLayer(a) ? "performance_results" : "kols";
 
   // The ranking KPI for the active (objective, source). Returns the sort value,
   // whether lower wins, a display string, and validity (enough data to rank).
@@ -110,12 +114,13 @@
   let objFilter = "Awareness", srcFilter = "organic";
   let curHost = null, curAsset = null, curRoster = [];
   const nameOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).name || k.name || ("#" + k.influencer_id);
-  const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || N((k.metrics || {}).followers);
+  const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || k.followers || N((k.metrics || {}).followers);
+  const nameKey = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
 
-  const inObj = (k) => (k.objective || "") === objFilter;
+  const inObj = (k) => !k.objective || k.objective === objFilter;
   // Organic = no ad spend (no boost); AD = has boost. A boosted post is never organic.
   const srcOK = (k) => srcFilter === "ad" ? adSpend(k) > 0 : adSpend(k) === 0;
-  const eligible = (a, type) => (a.kols || []).map((k, i) => ({ k, i })).filter(({ k }) => ctype(k) === type && inObj(k) && srcOK(k));
+  const eligible = (a, type) => perfItems(a).map((k, i) => ({ k, i })).filter(({ k }) => ctype(k) === type && inObj(k) && srcOK(k));
   const rankIn = (a, type) => eligible(a, type)
     .map((x) => ({ ...x, m: kpi(objFilter, srcFilter, x.k) }))
     .filter((x) => x.m.valid)
@@ -123,7 +128,8 @@
 
   function boxesHtml(a) {
     const p = probeKpi();
-    const legend = `<div class="perf-legend"><span class="material-symbols-outlined text-[16px]">leaderboard</span>จัดอันดับด้วย <b>${esc(p.label)}</b> <span class="perf-legend-unit">(${esc(p.unit)})</span> · <b>${esc(p.dir)}</b> · เปลี่ยน OBJ / Source แล้วทุกกล่องจัดอันดับใหม่</div>`;
+    const usingPerfLayer = hasPerfLayer(a);
+    const legend = `<div class="perf-legend"><span class="material-symbols-outlined text-[16px]">leaderboard</span>จัดอันดับด้วย <b>${esc(p.label)}</b> <span class="perf-legend-unit">(${esc(p.unit)})</span> · <b>${esc(p.dir)}</b> · ${usingPerfLayer ? "อ่านผลจากไฟล์ Performance แยกตามสื่อ" : "ยังใช้ข้อมูลเดิมจาก KOL Plan"}</div>`;
     const cards = BOXES.map((box) => {
       const ranked = rankIn(a, box.type);
       const total = eligible(a, box.type).length;
@@ -152,7 +158,7 @@
     host.querySelectorAll("[data-expand]").forEach((b) => b.addEventListener("click", () => openPerfModal(a, b.getAttribute("data-expand"))));
     const sechead = host.previousElementSibling;
     const cnt = sechead && sechead.classList.contains("ca-sechead") && sechead.querySelector(".ca-linkcount");
-    if (cnt) cnt.textContent = `${(a.kols || []).filter((k) => hasData(k.metrics)).length} / ${(a.kols || []).length} วัดผล`;
+    if (cnt) cnt.textContent = `${perfItems(a).filter((k) => hasData(k.metrics)).length} / ${perfItems(a).length} วัดผล`;
   }
   const rerender = () => { if (curHost && curAsset) renderSection(curHost, curAsset); };
 
@@ -161,6 +167,8 @@
     const admin = CA.canEdit(a);   // admin or a manager assigned to this campaign
     const ro = admin ? "" : "disabled";
     const ranked = rankIn(a, type);
+    const rowsRef = perfItems(a);
+    const patchKey = perfPatchKey(a);
     const cell = (i, key, val) => `<input class="kol-in num" inputmode="numeric" data-pf="${key}" data-i="${i}" data-money value="${fmtN(val)}" ${ro}/>`;
     const rows = ranked.map((x, rank) => {
       const m = x.k.metrics || {};
@@ -175,7 +183,7 @@
         <td class="n perf-kpi" data-kpi="${x.i}"><b>${x.m.display}</b></td>
       </tr>`;
     }).join("");
-    const note = `<div class="text-[12px] text-on-surface-variant">OBJ <b>${esc(objFilter)}</b> · <b>${srcFilter === "ad" ? "AD (Paid)" : "Organic"}</b> → จัดอันดับด้วย <b>${esc(kpiTitle())}</b>${srcFilter === "ad" ? " (ad spend = Boosting จาก Section B)" : ""}${admin ? " · แก้ตัวเลขได้ในตาราง" : ""}</div>`;
+    const note = `<div class="text-[12px] text-on-surface-variant">OBJ <b>${esc(objFilter)}</b> · <b>${srcFilter === "ad" ? "AD (Paid)" : "Organic"}</b> → จัดอันดับด้วย <b>${esc(kpiTitle())}</b>${srcFilter === "ad" ? " (ad spend = Boosting จาก Section B/ไฟล์ Performance)" : ""}${admin ? " · แก้ตัวเลขได้ในตาราง" : ""}</div>`;
     const head = `<th>#</th><th>KOL</th><th class="n">Followers</th>${METRICS.map((mt) => `<th class="n">${mt.label}</th>`).join("")}<th class="n">Engagement</th><th class="n">Conversions</th><th class="n">Ad Spend</th><th class="n perf-kpi-h">${esc(kpi(objFilter, srcFilter, { metrics: {} }).label)}</th>`;
     const colspan = METRICS.length + 6;
     const body = `${note}<div class="kol-wrap"><table class="kol-table perf-table">
@@ -185,23 +193,23 @@
     const m = modal(`Performance — ${box.label}`, box.icon, body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>`, "max-w-7xl");
     if (!admin) return;
     let timer;
-    const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveAsset(a.id, { kols: a.kols }, a).then(rerender).catch((e) => toast(e.message, "err")), 600); };
+    const persist = () => { clearTimeout(timer); timer = setTimeout(() => saveAsset(a.id, { [patchKey]: rowsRef }, a).then(rerender).catch((e) => toast(e.message, "err")), 600); };
     m.querySelectorAll("[data-pf]").forEach((inp) => {
       const key = inp.getAttribute("data-pf"), i = +inp.getAttribute("data-i");
       inp.addEventListener("input", () => {
         const digits = inp.value.replace(/[^\d]/g, "");
-        a.kols[i].metrics = a.kols[i].metrics || {};
-        a.kols[i].metrics[key] = digits === "" ? "" : Number(digits);
-        const mm = a.kols[i].metrics;
+        rowsRef[i].metrics = rowsRef[i].metrics || {};
+        rowsRef[i].metrics[key] = digits === "" ? "" : Number(digits);
+        const mm = rowsRef[i].metrics;
         const setTxt = (sel, v) => { const c = m.querySelector(sel); if (c) c.textContent = v; };
         setTxt(`[data-eng="${i}"]`, fmtN(engagement(mm)));
         setTxt(`[data-conv="${i}"]`, fmtN(conversions(mm)));
         const kc = m.querySelector(`.perf-kpi[data-kpi="${i}"]`);
-        if (kc) kc.innerHTML = `<b>${kpi(objFilter, srcFilter, a.kols[i]).display}</b>`;
+        if (kc) kc.innerHTML = `<b>${kpi(objFilter, srcFilter, rowsRef[i]).display}</b>`;
         persist();
       });
-      inp.addEventListener("focus", () => { const v = (a.kols[i].metrics || {})[key]; inp.value = (v === "" || v == null) ? "" : String(v); });
-      inp.addEventListener("blur", () => { const v = (a.kols[i].metrics || {})[key]; inp.value = (v === "" || v == null) ? "" : Number(v).toLocaleString("en-US"); });
+      inp.addEventListener("focus", () => { const v = (rowsRef[i].metrics || {})[key]; inp.value = (v === "" || v == null) ? "" : String(v); });
+      inp.addEventListener("blur", () => { const v = (rowsRef[i].metrics || {})[key]; inp.value = (v === "" || v == null) ? "" : Number(v).toLocaleString("en-US"); });
     });
   }
 
@@ -257,28 +265,102 @@
     return bestScore >= IMPORT_HEADER_MATCH_THRESHOLD ? bestField : null;
   };
 
+  const seedPerfResults = (a) => (a.performance_results || []).length
+    ? (a.performance_results || []).map((x) => ({ ...x, metrics: { ...(x.metrics || {}) } }))
+    : (a.kols || []).filter((k) => hasData(k.metrics)).map((k) => ({
+        influencer_id: k.influencer_id,
+        name: nameOf(k),
+        followers: followersOf(k),
+        tier: k.tier,
+        objective: k.objective || objFilter,
+        media_type: ctype(k),
+        boosting_cost: k.boosting_cost,
+        metrics: { ...(k.metrics || {}) },
+      }));
+  const baseKolFor = (a, name) => (a.kols || []).find((k) => nameKey(nameOf(k)) === nameKey(name) || nameKey(k.name) === nameKey(name)) || {};
+  const makePerfResult = (a, name, mediaType) => {
+    const base = baseKolFor(a, name);
+    return {
+      influencer_id: base.influencer_id,
+      name: name || base.name || nameOf(base),
+      followers: base.followers || followersOf(base),
+      tier: base.tier,
+      objective: base.objective || objFilter,
+      media_type: mediaType,
+      boosting_cost: base.boosting_cost || 0,
+      metrics: {},
+    };
+  };
+  const rowKey = (row) => `${nameKey(nameOf(row))}::${ctype(row)}`;
+
+  function clearLegacyMetrics(a, type) {
+    (a.kols || []).forEach((k) => {
+      if (type === "all" || ctype(k) === type) {
+        k.metrics = {};
+        if (type === "all" && k.media_type) delete k.media_type;
+      }
+    });
+  }
+
+  function openClearModal(a) {
+    if (!CA.canEdit(a)) return toast("คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (ล้างผลไม่ได้)", "err");
+    const items = perfItems(a);
+    const counts = Object.fromEntries(BOXES.map((b) => [b.type, items.filter((k) => hasData(k.metrics) && ctype(k) === b.type).length]));
+    const total = items.filter((k) => hasData(k.metrics)).length;
+    const body = `<div class="text-[13px] text-on-surface-variant">ใช้ตอนอัปไฟล์ผิดหรือต้องเริ่มนำเข้าผลใหม่ ระบบจะล้างเฉพาะ Performance ใน Section C/D ไม่ลบ KOL Plan หรือไฟล์สื่อใน Section B</div>
+      <div class="grid grid-cols-2 gap-sm">
+        ${BOXES.map((b) => `<button data-clear="${b.type}" class="imp-btn"><span class="material-symbols-outlined text-[16px]">${b.icon}</span>ล้าง ${b.label} (${counts[b.type]})</button>`).join("")}
+        <button data-clear="all" class="imp-btn" style="border-color:#f0b4b4;color:#ba1a1a"><span class="material-symbols-outlined text-[16px]">delete_sweep</span>ล้างทั้งหมด (${total})</button>
+      </div>`;
+    const m = modal("ล้างผล Performance", "delete_sweep", body, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Cancel</button>`, "max-w-xl");
+    m.querySelectorAll("[data-clear]").forEach((btn) => btn.addEventListener("click", async () => {
+      const type = btn.getAttribute("data-clear");
+      const label = type === "all" ? "ทั้งหมด" : typeLabel(type);
+      if (!confirm(`ล้างผล Performance: ${label}?`)) return;
+      try {
+        let patch;
+        if (hasPerfLayer(a)) {
+          a.performance_results = type === "all" ? [] : (a.performance_results || []).filter((k) => ctype(k) !== type);
+          clearLegacyMetrics(a, type);
+          patch = { performance_results: a.performance_results, kols: a.kols || [] };
+        } else {
+          clearLegacyMetrics(a, type);
+          patch = { kols: a.kols || [] };
+        }
+        await saveAsset(a.id, patch, a);
+        toast(`ล้างผล ${label} แล้ว`);
+        m.remove();
+        rerender();
+      } catch (e) { toast(e.message, "err"); }
+    }));
+  }
+
   function openImportModal(a) {
     const cols = ["KOL", "Type", ...Object.values(FIELD_LABEL)];
     const template = cols.join(",") + "\n"
       + "Elena Rodriguez,ภาพนิ่ง,110407,119517,0,66,23,51,8,7,90,0,0,3000\n"
-      + "Priya Sharma,อัลบั้ม,90000,120000,0,1200,40,20,30,0,80,0,0,2500\n"
-      + "David Kim,วิดีโอ,124200,152000,540000,2256,52,32,62,0,140,0,0,6000";
+      + "Elena Rodriguez,อัลบั้ม,90000,120000,0,1200,40,20,30,0,80,0,0,2500\n"
+      + "Elena Rodriguez,วิดีโอ,124200,152000,540000,2256,52,32,62,0,140,0,0,6000";
     const fmtDoc = `<div class="imp-doc">
       <div class="imp-doc-h">ฟอแมตไฟล์ที่ระบบรับ — CSV (export จากหลังบ้านแอด แล้ว Save as .csv)</div>
       <table class="imp-doc-t"><thead><tr><th>คอลัมน์</th><th>แมชเข้ากับ</th><th>จำเป็น?</th></tr></thead><tbody>
         <tr><td><b>KOL</b></td><td>ชื่อ KOL ในแคมเปญ (ใช้จับคู่)</td><td>จำเป็น</td></tr>
-        <tr><td><b>Type</b></td><td>ประเภทสื่อ → แยกกล่อง ภาพนิ่ง / อัลบั้ม / วิดีโอ</td><td>แนะนำ</td></tr>
+        <tr><td><b>Type</b></td><td>ประเภทสื่อ → แยกกล่อง ภาพนิ่ง / อัลบั้ม / วิดีโอ</td><td>แนะนำมาก</td></tr>
         ${Object.keys(FIELD_LABEL).map((f) => `<tr><td>${FIELD_LABEL[f]}</td><td>metrics.${f}</td><td>ถ้ามี</td></tr>`).join("")}
       </tbody></table>
-      <div class="imp-doc-note">• จับคู่ด้วย <b>ชื่อ KOL</b> (ไม่สนตัวพิมพ์เล็ก/ใหญ่) • <b>Type</b> รับค่า: ภาพนิ่ง/อัลบั้ม/วิดีโอ หรือ image/album/video (ไม่ใส่ = ภาพนิ่ง) • ตัวเลขใส่ลูกน้ำได้ • หัวคอลัมน์รองรับชื่อใกล้เคียง (Impr., Views, Spend…) • <b>Ad Spend</b> = ค่ายิงแอด จะอัปเดตเข้า Boosting ของ KOL</div>
+      <div class="imp-doc-note">• จับคู่ด้วย <b>ชื่อ KOL</b> + <b>Type</b> ดังนั้นชื่อซ้ำทำได้ เช่น Elena มีทั้งภาพนิ่ง/อัลบั้ม/วิดีโอ • ถ้าไม่มี Type ระบบจะลงสื่อที่เลือกในช่อง fallback • ตัวเลขใส่ลูกน้ำได้ • <b>Ad Spend</b> = ค่ายิงแอดของ performance row นั้น</div>
       <button data-tpl class="imp-btn"><span class="material-symbols-outlined text-[16px]">download</span>ดาวน์โหลด template .csv</button>
     </div>`;
     const body = `
-      <div class="text-[13px] text-on-surface-variant">Export ผลจากหลังบ้านแอด (Meta / TikTok ฯลฯ) เป็น CSV แล้วนำเข้าที่นี่ เพื่อแมชค่าเมตริกเข้ากับ KOL — ระบบจับคู่ด้วย <b>ชื่อ KOL</b></div>
+      <div class="text-[13px] text-on-surface-variant">นำเข้าแบบเพิ่ม/อัปเดต: ถ้าเจอ <b>ชื่อ KOL + ประเภทสื่อ</b> เดิมจะอัปเดตแถวนั้น ถ้าเป็นสื่อใหม่ของชื่อเดิมจะเพิ่มเป็นผลอีกแถวให้ Section C/D แยกกัน</div>
       <button data-fmt class="imp-fmt"><span class="imp-bang">!</span> ดูฟอแมตไฟล์ที่รองรับ</button>
       <div id="imp-doc" style="display:none">${fmtDoc}</div>
+      <div class="grid grid-cols-2 gap-sm">
+        <label class="flex flex-col gap-1">${lbl("ถ้าไฟล์ไม่มี Type ให้ลงสื่อ")}<select id="imp-default-type" class="${inpCls}">${BOXES.map((b) => `<option value="${b.type}">${b.label}</option>`).join("")}</select></label>
+        <label class="flex flex-col gap-1">${lbl("โหมดนำเข้า")}<select id="imp-mode" class="${inpCls}"><option value="merge">เพิ่ม/อัปเดต (แนะนำ)</option><option value="replace-types">แทนที่เฉพาะสื่อในไฟล์นี้</option><option value="replace-all">ล้างทั้งหมดแล้วนำเข้าใหม่</option></select></label>
+      </div>
       <label class="flex flex-col gap-1">${lbl("อัปโหลดไฟล์ CSV")}<input id="imp-file" type="file" accept=".csv,text/csv" class="${inpCls}"/></label>
-      <label class="flex flex-col gap-1">${lbl("หรือวางข้อมูล CSV")}<textarea id="imp-paste" rows="4" class="${inpCls}" placeholder="KOL,Reach,Impressions,...&#10;Elena Rodriguez,110407,119517,..."></textarea></label>
+      <label class="flex flex-col gap-1">${lbl("หรือวางข้อมูล CSV")}<textarea id="imp-paste" rows="4" class="${inpCls}" placeholder="KOL,Type,Reach,Impressions,...&#10;Elena Rodriguez,ภาพนิ่ง,110407,119517,..."></textarea></label>
       <button data-parse class="imp-btn-primary"><span class="material-symbols-outlined text-[17px]">find_in_page</span>ตรวจ & พรีวิว</button>
       <div id="imp-preview"></div>`;
     const m = modal("นำเข้าผล Performance", "upload_file", body, `
@@ -293,33 +375,33 @@
     const doParse = (text) => {
       const rows = csvParse(text);
       if (rows.length < 2) return toast("ไฟล์ว่างหรือไม่มีข้อมูล", "err");
+      const fallbackType = m.querySelector("#imp-default-type").value || "image";
       const headers = rows[0].map(colKey);
       const kolCol = headers.indexOf("kol");
       if (kolCol < 0) return toast("ไม่พบคอลัมน์ KOL (ชื่อ KOL) ในหัวตาราง", "err");
-      const typeCol = headers.indexOf("type");   // optional — routes each row to a media box
+      const typeCol = headers.indexOf("type");
       const fieldCols = headers.map((f, idx) => ({ f, idx })).filter((x) => x.f && x.f !== "kol" && x.f !== "type");
       if (!fieldCols.length) return toast("ไม่พบคอลัมน์เมตริกที่รองรับ", "err");
-      const lut = new Map();
-      (a.kols || []).forEach((k, i) => { lut.set(nameOf(k).trim().toLowerCase(), i); if (k.name) lut.set(k.name.trim().toLowerCase(), i); });
+      const baseNames = new Set((a.kols || []).flatMap((k) => [nameOf(k), k.name]).filter(Boolean).map(nameKey));
       const matched = [], unmatched = [];
       for (let r = 1; r < rows.length; r++) {
         const nm = (rows[r][kolCol] || "").trim(); if (!nm) continue;
-        const idx = lut.get(nm.toLowerCase());
-        const mediaType = typeCol >= 0 ? normType(rows[r][typeCol]) : null;
+        const mediaType = (typeCol >= 0 ? normType(rows[r][typeCol]) : null) || fallbackType;
         const vals = {};
         fieldCols.forEach(({ f, idx: ci }) => { const raw = String(rows[r][ci] || "").replace(/[^\d.-]/g, ""); if (raw !== "") vals[f] = Number(raw); });
-        if (idx == null) unmatched.push(nm); else matched.push({ i: idx, name: nm, vals, mediaType });
+        if (!baseNames.has(nameKey(nm))) unmatched.push(nm); else matched.push({ name: nm, vals, mediaType });
       }
       parsed = matched;
       const fieldsFound = fieldCols.map((x) => FIELD_LABEL[x.f]).join(", ");
-      const typeCount = matched.filter((x) => x.mediaType).length;
+      const byType = Object.fromEntries(BOXES.map((b) => [b.type, matched.filter((x) => x.mediaType === b.type).length]));
       m.querySelector("#imp-preview").innerHTML = `<div class="imp-prev">
         <div class="imp-prev-h">พบ <b style="color:#3a7d44">${matched.length}</b> แมชได้ · <b style="color:${unmatched.length ? "#b06a00" : "#8a8a8f"}">${unmatched.length}</b> ไม่พบชื่อในแคมเปญ</div>
         <div class="imp-prev-cols">คอลัมน์ที่จะอัปเดต: ${esc(fieldsFound) || "—"}</div>
+        <div class="imp-prev-cols">แยกสื่อ: ${BOXES.map((b) => `${b.label} <b>${byType[b.type]}</b>`).join(" · ")}</div>
         ${typeCol >= 0
-          ? `<div class="imp-prev-cols">แยกประเภทสื่อจากคอลัมน์ Type: <b>${typeCount}</b>/${matched.length} แถว (ที่ไม่ระบุ = ภาพนิ่ง)</div>`
-          : `<div class="imp-prev-cols" style="color:#b06a00">⚠ ไม่มีคอลัมน์ <b>Type</b> → ทุก KOL จะเข้ากล่อง "ภาพนิ่ง" ทั้งหมด (เพิ่มคอลัมน์ Type เพื่อแยก อัลบั้ม/วิดีโอ)</div>`}
-        ${matched.length ? `<ul class="imp-prev-list">${matched.slice(0, 12).map((x) => `<li><span class="material-symbols-outlined text-[15px]" style="color:#3a7d44">check_circle</span>${esc(x.name)} <span style="color:#8a8a8f">· ${Object.keys(x.vals).length} ค่า</span></li>`).join("")}${matched.length > 12 ? `<li style="color:#8a8a8f">…และอีก ${matched.length - 12}</li>` : ""}</ul>` : ""}
+          ? `<div class="imp-prev-cols">ใช้คอลัมน์ Type จากไฟล์ ถ้าค่าอ่านไม่ได้จะลง fallback ที่เลือกไว้</div>`
+          : `<div class="imp-prev-cols" style="color:#b06a00">⚠ ไม่มีคอลัมน์ <b>Type</b> → ทุกแถวจะลง <b>${esc(typeLabel(fallbackType))}</b></div>`}
+        ${matched.length ? `<ul class="imp-prev-list">${matched.slice(0, 12).map((x) => `<li><span class="material-symbols-outlined text-[15px]" style="color:#3a7d44">check_circle</span>${esc(x.name)} <span style="color:#8a8a8f">· ${esc(typeLabel(x.mediaType))} · ${Object.keys(x.vals).length} ค่า</span></li>`).join("")}${matched.length > 12 ? `<li style="color:#8a8a8f">…และอีก ${matched.length - 12}</li>` : ""}</ul>` : ""}
         ${unmatched.length ? `<div class="imp-prev-warn"><span class="material-symbols-outlined text-[15px]">warning</span>ไม่พบชื่อในแคมเปญ: ${unmatched.slice(0, 8).map(esc).join(", ")}${unmatched.length > 8 ? ` …(+${unmatched.length - 8})` : ""}</div>` : ""}
       </div>`;
       const apply = m.querySelector("[data-apply]");
@@ -332,20 +414,41 @@
     });
     m.querySelector("[data-apply]").addEventListener("click", async () => {
       if (!parsed || !parsed.length) return;
-      parsed.forEach(({ i, vals, mediaType }) => {
-        const k = a.kols[i]; k.metrics = Object.assign({}, k.metrics || {});
-        if (mediaType) k.media_type = mediaType;   // route this KOL to the matching media box
-        Object.keys(vals).forEach((f) => { if (f === "ad_spend") k.boosting_cost = vals[f]; else k.metrics[f] = vals[f]; });
+      const mode = m.querySelector("#imp-mode").value;
+      let results = seedPerfResults(a);
+      const importTypes = new Set(parsed.map((x) => x.mediaType));
+      if (mode === "replace-all") results = [];
+      else if (mode === "replace-types") results = results.filter((r) => !importTypes.has(ctype(r)));
+      const index = new Map(results.map((r, i) => [rowKey(r), i]));
+      parsed.forEach(({ name, vals, mediaType }) => {
+        const key = `${nameKey(name)}::${mediaType}`;
+        let i = index.get(key);
+        if (i == null) {
+          results.push(makePerfResult(a, name, mediaType));
+          i = results.length - 1;
+          index.set(key, i);
+        }
+        const row = results[i];
+        row.name = row.name || name;
+        row.media_type = mediaType;
+        row.objective = row.objective || objFilter;
+        row.metrics = Object.assign({}, row.metrics || {});
+        Object.keys(vals).forEach((f) => { if (f === "ad_spend") row.boosting_cost = vals[f]; else row.metrics[f] = vals[f]; });
       });
-      try { await saveAsset(a.id, { kols: a.kols }, a); toast(`นำเข้าผล ${parsed.length} KOL แล้ว ✓`); m.remove(); rerender(); }
-      catch (e) { toast(e.message, "err"); }
+      try {
+        a.performance_results = results;
+        await saveAsset(a.id, { performance_results: results }, a);
+        toast(`นำเข้าผล ${parsed.length} แถวแล้ว ✓`);
+        m.remove();
+        rerender();
+      } catch (e) { toast(e.message, "err"); }
     });
   }
 
   // ---- HTML report fragment (consumed by the core handoff report) ----
   async function reportHtml(a) {
     curRoster = await CA.roster();
-    const ranked = (a.kols || []).filter((k) => hasData(k.metrics) && inObj(k) && srcOK(k))
+    const ranked = perfItems(a).filter((k) => hasData(k.metrics) && inObj(k) && srcOK(k))
       .map((k) => ({ k, m: kpi(objFilter, srcFilter, k) }))
       .sort((p, q) => srcFilter === "ad" ? (p.m.valid ? p.m.value : Infinity) - (q.m.valid ? q.m.value : Infinity) : q.m.value - p.m.value);
     if (!ranked.length) return "";
@@ -363,12 +466,15 @@
     order: 3,
     letter: "C.",
     title: "Performance",
-    count: (a) => { const n = (a.kols || []).filter((k) => hasData(k.metrics)).length; return `${n} / ${(a.kols || []).length} วัดผล`; },
+    count: (a) => { const n = perfItems(a).filter((k) => hasData(k.metrics)).length; return `${n} / ${perfItems(a).length} วัดผล`; },
     controls: (a) => [
       { select: true, value: objFilter, options: OBJECTIVES.map((o) => ({ value: o.id, label: "OBJ: " + o.label })), onChange: (v) => { objFilter = v; rerender(); } },
       { select: true, value: srcFilter, options: SOURCES.map((s) => ({ value: s.id, label: s.label })), onChange: (v) => { srcFilter = v; rerender(); } },
     ],
-    actions: (a) => [{ icon: "upload_file", label: "นำเข้าผล", onClick: () => openImportModal(a) }],
+    actions: (a) => [
+      { icon: "upload_file", label: "นำเข้าผล", onClick: () => openImportModal(a) },
+      { icon: "delete_sweep", label: "ล้างผล", onClick: () => openClearModal(a) },
+    ],
     render: async (host, a) => { curRoster = await CA.roster(); renderSection(host, a); },
     reportHtml,
   });
