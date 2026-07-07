@@ -162,8 +162,11 @@
 
     host.querySelectorAll("[data-budget-eye]").forEach((b) => b.addEventListener("click", () => {
       const f = b.getAttribute("data-budget-eye"); a.budget_show = a.budget_show || {};
-      a.budget_show[f] = a.budget_show[f] === false; renderKolTableV2(host, a, roster);
-      saveAsset(a.id, { budget_show: a.budget_show }, a).catch((e) => toast(e.message, "err"));
+      const newVis = a.budget_show[f] === false;
+      a.budget_show[f] = newVis;
+      a.kols.forEach((k) => { k.show = k.show || {}; k.show[f] = newVis; });
+      renderKolTableV2(host, a, roster);
+      saveAsset(a.id, { budget_show: a.budget_show, kols: a.kols }, a).catch((e) => toast(e.message, "err"));
     }));
 
     if (!admin) return;
@@ -469,10 +472,12 @@
       a.budget_show = a.budget_show || {};
       const newVis = a.budget_show[f] === false;   // hidden → show · shown → hide
       a.budget_show[f] = newVis;
+      a.kols.forEach((k) => { k.show = k.show || {}; k.show[f] = newVis; });
       b.classList.toggle("on", newVis);
       b.querySelector(".material-symbols-outlined").textContent = newVis ? "visibility" : "visibility_off";
       b.closest(".kol-tot").classList.toggle("is-cust-hidden", !newVis);
-      saveAsset(a.id, { budget_show: a.budget_show }, a).catch((e) => toast(e.message, "err"));
+      renderKolTable(host, a, roster);
+      saveAsset(a.id, { budget_show: a.budget_show, kols: a.kols }, a).catch((e) => toast(e.message, "err"));
     }));
 
     if (!admin) return;
