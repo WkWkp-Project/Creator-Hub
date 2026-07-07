@@ -65,6 +65,10 @@ class ContentAsset(Base):
     # shape can evolve without a migration. See docs for the field contract.
     kols: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     sow_options: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Section C/D — imported performance rows, separated from the KOL plan so the
+    # same creator can have distinct results for image / album / video without
+    # duplicating budget rows in Section B.
+    performance_results: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     # Per-campaign access control — User ids granted access (managers edit /
     # viewers read). Set by admins only; admins always have access regardless.
     assigned_user_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
@@ -103,6 +107,7 @@ class ContentAssetBase(BaseModel):
     budget_show: dict[str, bool] = Field(default_factory=dict)
     kols: list[dict[str, Any]] | None = None
     sow_options: list[str] | None = None
+    performance_results: list[dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("status")
     @classmethod
@@ -138,6 +143,7 @@ class ContentAssetUpdate(BaseModel):
     budget_show: dict[str, bool] | None = None
     kols: list[dict[str, Any]] | None = None
     sow_options: list[str] | None = None
+    performance_results: list[dict[str, Any]] | None = None
     row_version: int | None = None   # the version the client loaded (optimistic lock)
 
     @field_validator("status")
@@ -155,6 +161,7 @@ class ContentAssetOut(ContentAssetBase):
     input_files: list[dict[str, Any]] = Field(default_factory=list)
     kols: list[dict[str, Any]] = Field(default_factory=list)
     sow_options: list[str] = Field(default_factory=list)
+    performance_results: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
