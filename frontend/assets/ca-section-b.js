@@ -135,6 +135,9 @@
     const tot = (f) => kols.reduce((s, k) => s + (admin || cellOpen(k, f) ? (Number(k[f]) || 0) : 0), 0);
     const grand = V2_BUDGET.reduce((s, b) => s + (colVis(b.f) ? tot(b.f) : 0), 0);
     const bEye = (f) => admin ? `<button class="kol-eye ${bvis(f) ? "on" : ""}" data-budget-eye="${f}"><span class="material-symbols-outlined text-[16px]">${bvis(f) ? "visibility" : "visibility_off"}</span></button>` : "";
+    const bHead = (b) => `<th class="${admin && !bvis(b.f) ? "is-cust-hidden" : ""}">
+      <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap">${b.th}${bEye(b.f)}</span>
+    </th>`;
     const foot = (admin || visB.length) ? `<div class="kol-foot"><div class="kol-foot-items">
       ${V2_BUDGET.filter((b) => admin || colVis(b.f)).map((b) => `<div class="kol-tot ${admin && !bvis(b.f) ? "is-cust-hidden" : ""}"><span class="l">${b.th}</span><span class="kol-tot-vrow"><span class="v" data-tot="${b.f}">${money$(tot(b.f))}</span>${bEye(b.f)}</span></div>`).join("")}
       <div class="kol-tot kol-tot-budget"><span class="l">Total Budget</span><span class="kol-tot-vrow"><span class="v" data-tot="grand">${money$(grand)}</span></span></div>
@@ -152,7 +155,7 @@
       <div class="kol-wrap"><table class="kol-table"><thead><tr>
         ${admin ? `<th><input type="checkbox" class="kol-check" data-select-all title="Select all"/></th>` : ""}<th>#</th><th>Type</th><th>KOL Name</th><th>Follower</th><th>Content</th><th>SOW</th><th>Product Focus</th><th>Post Date</th>
         ${V2_PLATFORMS.map((p) => `<th title="${p.label}"><i class="${p.icon}"></i></th>`).join("")}${admin ? "<th>Links</th>" : ""}
-        ${visB.map((b) => `<th>${b.th}</th>`).join("")}<th>Gencode</th><th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
+        ${visB.map(bHead).join("")}<th>Gencode</th><th>Cond.</th><th>Media</th>${admin ? "<th></th>" : ""}
       </tr></thead><tbody>${body}</tbody></table></div>${foot}</div>`;
 
     host.querySelector("[data-sort]")?.addEventListener("click", () => { kolSortDir = kolSortDir === "desc" ? "asc" : "desc"; renderKolTableV2(host, a, roster); });
