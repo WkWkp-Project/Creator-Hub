@@ -26,20 +26,22 @@
   // Media type — mirror Section C: an explicit media_type (set on import) wins,
   // otherwise infer from Section B media, defaulting to ภาพนิ่ง.
   const TYPE_LABEL = { image: "ภาพนิ่ง", album: "อัลบัม", video: "วิดีโอ" };
-  const ctype = (k) => {
-    if (k.media_type && TYPE_LABEL[k.media_type]) return TYPE_LABEL[k.media_type];
+  const ctypeKey = (k) => {
+    if (k.media_type && TYPE_LABEL[k.media_type]) return k.media_type;
     const t = (k.media || []).map((x) => x.type);
-    return t.includes("video") ? "วิดีโอ" : t.includes("album") ? "อัลบัม" : "ภาพนิ่ง";
+    return t.includes("video") ? "video" : t.includes("album") ? "album" : "image";
   };
+  const ctype = (k) => TYPE_LABEL[ctypeKey(k)] || "ภาพนิ่ง";
   const fmtN = (n) => (n === "" || n == null) ? "" : Number(n).toLocaleString("en-US");
   const fmtMoney = (n) => N(n) ? "฿" + fmtN(n) : "—";
   const hasData = (m) => m && Object.values(m).some((v) => N(v) > 0);
+  const perfItems = (a) => (Array.isArray(a.performance_results) && a.performance_results.length) ? a.performance_results : (a.kols || []);
 
   let expanded = false, curAsset = null, curHost = null, curRoster = [];
   let sortKey = "engagement", sortDir = "desc";
   const tierRank = (t) => ({ Mega: 5, Macro: 4, "Mid-Tier": 3, Micro: 2, Nano: 1 }[t] || 0);
   const nameOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).name || k.name || ("#" + k.influencer_id);
-  const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || N((k.metrics || {}).followers);
+  const followersOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).followers || k.followers || N((k.metrics || {}).followers);
   const tierOf = (k) => (curRoster.find((r) => r.id === k.influencer_id) || {}).tier || k.tier || "";
   const tierChip = (k) => { const t = tierOf(k); return t ? `<span class="tier-chip tier-${["Nano", "Micro", "Mid-Tier", "Macro", "Mega"].includes(t) ? t : "custom"}">${esc(t)}</span>` : "—"; };
   const totalsFor = (items) => {
@@ -94,7 +96,7 @@
     if (key === "ad_spend") return N(k.boosting_cost);
     return N(m[key]);
   }
-  const ranked = (a) => (a.kols || []).slice().sort((p, q) => {
+  const ranked = (a) => perfItems(a).slice().sort((p, q) => {
     const va = sortVal(p, sortKey), vb = sortVal(q, sortKey);
     const c = (typeof va === "string") ? String(va).localeCompare(String(vb)) : (va - vb);
     return sortDir === "asc" ? c : -c;
@@ -133,13 +135,14 @@
   function renderSection(host, a) {
     if (curAsset && curAsset.id !== a.id) expanded = false;
     curHost = host; curAsset = a;
-    const total = (a.kols || []).length;
-    const measured = (a.kols || []).filter((k) => hasData(k.metrics)).length;
+    const items = perfItems(a);
+    const total = items.length;
+    const measured = items.filter((k) => hasData(k.metrics)).length;
     if (!expanded) {
       host.innerHTML = `<div class="d-collapsed">
         <div class="d-collapsed-info"><span class="material-symbols-outlined">table_view</span>
           <div><div class="d-collapsed-title">ตารางผลรวมทุก KOL</div>
-            <div class="d-collapsed-sub">${total} KOL · วัดผลแล้ว ${measured} · ทุกประเภทสื่อรวมในตารางเดียว</div></div></div>
+            <div class="d-collapsed-sub">${total} แถวผลลัพธ์ · วัดผลแล้ว ${measured} · ชื่อซ้ำแยกตามประเภทสื่อได้</div></div></div>
         <button class="d-toggle" data-toggle><span class="material-symbols-outlined text-[18px]">expand_more</span>ขยายดูภาพรวม</button>
       </div>`;
     } else {
@@ -157,7 +160,7 @@
 
   async function reportHtml(a) {
     curRoster = await CA.roster();
-    const list = (a.kols || []).filter((k) => hasData(k.metrics))
+    const list = perfItems(a).filter((k) => hasData(k.metrics))
       .sort((p, q) => engagement(q.metrics || {}) - engagement(p.metrics || {})).map((k) => ({ k }));
     if (!list.length) return "";
     const f = (v) => N(v) ? Number(v).toLocaleString("en-US") : "—";
@@ -166,7 +169,7 @@
       return `<tr><td class="c">${n + 1}</td><td class="b">${esc(nameOf(x.k))}</td><td class="c">${esc(tierOf(x.k)) || "—"}</td><td class="c">${ctype(x.k)}</td><td class="c">${N(x.k.boosting_cost) > 0 ? "Paid" : "Organic"}</td><td class="n">${f(followersOf(x.k))}</td>${COLS.map((c) => `<td class="n">${f(m[c.k])}</td>`).join("")}<td class="n">${f(engagement(m))}</td><td class="n">${f(conversions(m))}</td><td class="n">${N(x.k.boosting_cost) ? "฿" + f(x.k.boosting_cost) : "—"}</td></tr>`;
     }).join("");
     const totals = totalsFor(list.map((x) => x.k));
-    return `<h2><span class="em">D.</span>ผลรวมทุก KOL <span style="color:#8a8a8f;font-weight:600;font-size:13px">· ${list.length} KOL</span></h2>
+    return `<h2><span class="em">D.</span>ผลรวมทุก KOL <span style="color:#8a8a8f;font-weight:600;font-size:13px">· ${list.length} แถวผลลัพธ์</span></h2>
 <div class="panel"><table><thead><tr><th>#</th><th>KOL</th><th>Tier</th><th>Type</th><th>Source</th><th class="n">Followers</th>${COLS.map((c) => `<th class="n">${c.label}</th>`).join("")}<th class="n">Engagement</th><th class="n">Conversions</th><th class="n">Ad Spend</th></tr></thead><tbody>${rows}</tbody><tfoot>${totalCellsHtml(totals)}</tfoot></table></div>`;
   }
 
@@ -175,7 +178,7 @@
     order: 4,
     letter: "D.",
     title: "ผลรวมทุก KOL",
-    count: (a) => `${(a.kols || []).length} KOL`,
+    count: (a) => `${perfItems(a).length} แถวผลลัพธ์`,
     render: async (host, a) => { curRoster = await CA.roster(); renderSection(host, a); },
     reportHtml,
   });
