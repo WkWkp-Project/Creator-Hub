@@ -37,7 +37,7 @@ body{ font-family:'Prompt','Poppins',sans-serif; }
 
 .login-brand-mark{ display:flex; justify-content:center; align-items:center; min-height:54px; margin-bottom:4px; }
 .login-brand-mark img{ display:block; width:min(240px, 82%); height:auto; object-fit:contain; }
-.top-brand-logo{ display:block; width:auto; max-width:40vw; height:44px; object-fit:contain; object-position:left center; }
+.top-brand-logo{ display:block; width:auto; max-width:36vw; height:34px; object-fit:contain; object-position:left center; }
 
 /* Redesigned summary — soft single card, no hard dividers */
 .ca-summary{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px 30px;
