@@ -572,11 +572,12 @@ def test_campaign_multiple_responsible_members():
 
 def test_campaign_budget_show_visibility():
     viewer_id = client.get("/api/auth/me", headers=VIEWER).json()["id"]
+    inf = client.post("/api/influencers", json={"name": "Visible Sec B Name", "followers": 1234}).json()
     asset = client.post("/api/assets", json={
         "campaign_name": "Budget Vis", "drive_folder_url": "https://drive.google.com/drive/folders/b",
         "assigned_user_ids": [viewer_id],
         "kols": [{
-            "influencer_id": 0, "rate": 100, "gen_code_price": 20, "boosting_cost": 30,
+            "influencer_id": inf["id"], "rate": 100, "gen_code_price": 20, "boosting_cost": 30,
             "kol_price": 1000, "gencode_boosting": 200, "cart_added": 300,
             "buy_asset": 400, "outside_shooting": 500,
         }]}).json()
@@ -585,10 +586,13 @@ def test_campaign_budget_show_visibility():
         "budget_show": {"total": False, "boosting_cost": False, "kol_price": False}}).json()
     assert upd["budget_show"] == {"total": False, "boosting_cost": False, "kol_price": False}
     viewer_kol = client.get(f"/api/assets/{asset['id']}", headers=VIEWER).json()["kols"][0]
+    assert client.get(f"/api/influencers/{inf['id']}", headers=VIEWER).status_code == 403
+    assert viewer_kol["name"] == "Visible Sec B Name"
     for key in ("rate", "gen_code_price", "boosting_cost", "kol_price",
                 "gencode_boosting", "cart_added", "buy_asset", "outside_shooting"):
         assert viewer_kol[key] == ""
     client.delete(f"/api/assets/{asset['id']}")
+    client.delete(f"/api/influencers/{inf['id']}")
 
 
 def test_import_template_download():

@@ -126,6 +126,37 @@ def _redact_budget(asset: ContentAsset, user: models.User) -> None:
         asset.kols = [{**k, **{f: "" for f in hidden}} for k in (asset.kols or [])]
 
 
+def _hydrate_kol_names(asset: ContentAsset, db: Session) -> None:
+    """Attach KOL names to campaign rows without granting Directory profile access."""
+    ids: set[int] = set()
+    for k in asset.kols or []:
+        if not isinstance(k, dict) or k.get("name"):
+            continue
+        try:
+            iid = int(k.get("influencer_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if iid:
+            ids.add(iid)
+    if not ids:
+        return
+    names = dict(db.execute(select(models.Influencer.id, models.Influencer.name).where(models.Influencer.id.in_(ids))).all())
+    if not names:
+        return
+    hydrated = []
+    for k in asset.kols or []:
+        if not isinstance(k, dict) or k.get("name"):
+            hydrated.append(k)
+            continue
+        try:
+            iid = int(k.get("influencer_id") or 0)
+        except (TypeError, ValueError):
+            hydrated.append(k)
+            continue
+        hydrated.append({**k, "name": names.get(iid, k.get("name", ""))} if iid in names else k)
+    asset.kols = hydrated
+
+
 @router.get("", response_model=ContentAssetList)
 def list_assets(
     search: str | None = None,
@@ -164,6 +195,7 @@ def get_asset(asset_id: int, user: models.User = Depends(get_current_user), db: 
     obj = db.get(ContentAsset, asset_id)
     if not obj or not _can_read(user, obj):
         raise HTTPException(404, "Content asset not found")   # hide existence from unauthorised users
+    _hydrate_kol_names(obj, db)
     _redact_budget(obj, user)
     return obj
 

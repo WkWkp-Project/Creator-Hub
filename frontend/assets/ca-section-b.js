@@ -38,6 +38,7 @@
   ];
   const V2_TIERS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
   const CHANNEL_ORDER = ["instagram", "tiktok", "youtube", "facebook", "twitter", "website"];
+  const canViewDirectory = () => isAdmin() || !!window.CH?.user?.directory_access;
   const primaryChannelLink = (person = {}) => {
     const links = person.social_links || {};
     const key = CHANNEL_ORDER.find((k) => (links[k] || "").trim());
@@ -80,7 +81,8 @@
       return a2;
     };
     const nameCell = (k) => {
-      const name = k.influencer_id ? `<a href="#/influencer/${k.influencer_id}">${esc(nameOf(k))}</a>` : `<span>${esc(nameOf(k))}</span>`;
+      const label = esc(nameOf(k));
+      const name = k.influencer_id && canViewDirectory() ? `<a href="#/influencer/${k.influencer_id}">${label}</a>` : `<span>${label}</span>`;
       const url = channelOf(k);
       const open = url ? `<a class="kol-channel-link" href="${esc(url)}" target="_blank" rel="noopener" title="Open channel"><span class="material-symbols-outlined text-[14px]">open_in_new</span></a>` : "";
       const edit = admin ? `<button class="kol-channel-edit" data-channel-edit title="${url ? "Edit channel link" : "Add channel link"}"><span class="material-symbols-outlined text-[14px]">${url ? "edit" : "add_link"}</span></button>` : "";
@@ -400,7 +402,7 @@
         <td>${monthSel(k.month)}</td>
         <td>${tierChip(tierOf(k))}</td>
         <td>${txt("kol_type", k.kol_type ?? person.niche ?? "", "kol-in sm")}</td>
-        <td class="kol-name"><a href="#/influencer/${k.influencer_id}">${esc(name)}</a></td>
+        <td class="kol-name">${k.influencer_id && canViewDirectory() ? `<a href="#/influencer/${k.influencer_id}">${esc(name)}</a>` : `<span>${esc(name)}</span>`}</td>
         <td><button class="kol-cellbtn" data-sow-edit><span class="material-symbols-outlined text-[15px]">checklist</span>${(k.sow || []).length || "+"}</button></td>
         <td>${txt("product_focus", k.product_focus, "kol-in md")}</td>
         <td>${sel("client_approved", k.client_approved || "Pending", APPROVE)}</td>
@@ -549,7 +551,7 @@
       ids.forEach((id) => { const r = roster.find((x) => x.id === id) || {};
         // v2 row shape (KOLs-Confirmed format). Budget starts blank — it is entered
         // per campaign in the table, not prefilled from the Directory fee estimate.
-        kols.push({ influencer_id: id, month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", profile_link: primaryChannelLink(r), links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", conditions: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
+        kols.push({ influencer_id: id, name: r.name || "", month: "", tier: r.tier || "", kol_type: r.niche || "", followers: r.followers ?? "", content_type: "Video", sow: [], product_focus: "", post_date: "", profile_link: primaryChannelLink(r), links: {}, kol_price: 0, gencode_boosting: 0, cart_added: 0, buy_asset: 0, outside_shooting: 0, gencode: "", condition: "", conditions: "", objective: "Awareness", media: [], show: { kol_price: true, gencode_boosting: true, cart_added: true, buy_asset: true, outside_shooting: true } });
       });
       try { await saveKols(a, kols); toast(`เพิ่ม ${ids.length} KOL`); m.remove(); render(); } catch (e) { toast(e.message, "err"); }
     });
