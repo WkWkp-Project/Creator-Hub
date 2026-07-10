@@ -425,9 +425,9 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 
 /* Sidebar nav states */
 /* ===== Dark sidebar (charcoal + white text, Wakuwaku W mark) ===== */
-.app-sidebar{ background:#1a1a1d; border-right:1px solid #2e2e33; }
-.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:8px 4px 6px; min-height:52px; }
-.sb-brand-logo{ width:100%; max-width:148px; height:40px; object-fit:contain; display:block; }
+.app-sidebar{ background:#1a1a1d; border-right:1px solid #2e2e33; padding:24px !important; }
+.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:9px 4px 7px; min-height:55px; }
+.sb-brand-logo{ width:100%; max-width:157px; height:43px; object-fit:contain; display:block; }
 .sb-divider{ border-bottom:1px solid #303036; margin:10px 0 24px; }
 .sb-section{ display:flex; flex-direction:column; gap:9px; }
 .sb-section + .sb-section{ margin-top:26px; padding-top:20px; border-top:1px solid #303036; }
