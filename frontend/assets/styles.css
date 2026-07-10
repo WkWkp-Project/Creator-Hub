@@ -426,8 +426,8 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 /* Sidebar nav states */
 /* ===== Dark sidebar (charcoal + white text, Wakuwaku W mark) ===== */
 .app-sidebar{ background:#1a1a1d; border-right:1px solid #2e2e33; }
-.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:10px 4px 8px; min-height:58px; }
-.sb-brand-logo{ width:100%; max-width:166px; height:46px; object-fit:contain; display:block; }
+.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:8px 4px 6px; min-height:52px; }
+.sb-brand-logo{ width:100%; max-width:148px; height:40px; object-fit:contain; display:block; }
 .sb-divider{ border-bottom:1px solid #303036; margin:10px 0 24px; }
 .sb-section{ display:flex; flex-direction:column; gap:9px; }
 .sb-section + .sb-section{ margin-top:26px; padding-top:20px; border-top:1px solid #303036; }
@@ -449,8 +449,9 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 .sb-btn-ghost:hover{ background:rgba(255,255,255,.06); color:#fff; }
 .sb-tools{ display:flex; flex-direction:column; gap:4px; padding:0 2px 12px; }
 .sb-tool-link{ display:flex; align-items:center; gap:8px; width:100%; border:0; background:transparent; color:#c4c4c9;
-  border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; text-align:left; cursor:pointer; }
-.sb-tool-link .material-symbols-outlined{ font-size:18px; color:#8a8a8f; }
+  border-radius:8px; padding:8px 16px; font-size:15px; font-weight:700; text-align:left; cursor:pointer; }
+.nav-link .material-symbols-outlined,
+.sb-tool-link .material-symbols-outlined{ width:22px; min-width:22px; font-size:20px; line-height:1; color:currentColor; }
 .sb-tool-link:hover{ color:#fff; background:rgba(255,255,255,.06); }
 .sb-tool-link:hover .material-symbols-outlined{ color:#fff; }
 .sb-footer{ border-top:1px solid #2e2e33; }
