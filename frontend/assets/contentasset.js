@@ -214,7 +214,7 @@
           ${kolProgress(a)}${deadlineBadge(a)}
         </div>
         <div class="ca-card-foot">
-          <span class="ca-unlinked" style="font-family:'Prompt','Poppins',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
+          <span class="ca-unlinked" style="font-family:'Poppins','Prompt',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
           <span class="ca-linked">${linked} of ${slots.length} linked</span>
         </div>
       </div>`);
@@ -414,7 +414,7 @@
     const u = CH.user || {};
     const m = modal("Add New Campaign", "note_add", `
       <div class="flex flex-col gap-1">${lbl("MEMBER · แคมเปญนี้จะอยู่ภายใต้ member คนนี้")}
-        <div class="px-sm py-2 bg-surface-container rounded-lg text-[13px]" style="font-family:'Prompt','Poppins',sans-serif">${esc(u.full_name || u.username || "—")} · ${esc(u.username || "")}</div></div>
+        <div class="px-sm py-2 bg-surface-container rounded-lg text-[13px]" style="font-family:'Poppins','Prompt',sans-serif">${esc(u.full_name || u.username || "—")} · ${esc(u.username || "")}</div></div>
       <div class="grid grid-cols-2 gap-sm">
         <label class="flex flex-col gap-1">${lbl("Company Name (ชื่อบริษัทลูกค้า)")}<input id="ad-client" class="${inpCls}" placeholder="e.g. Ocean Bites Co., Ltd."/></label>
         <label class="flex flex-col gap-1">${lbl("Brand")}<select id="ad-brand" class="${inpCls}"><option value="">— none —</option>${brands.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select></label>
@@ -481,7 +481,7 @@
       <label class="flex flex-col gap-1">${lbl("Status")}<select id="ed-status" class="${inpCls}">${Object.keys(STATUS_LABEL).map((s) => `<option value="${s}" ${a.status === s ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("")}</select></label>
       <label class="flex flex-col gap-1">${lbl("📝 Description / Brief")}<textarea id="ed-desc" rows="5" class="${inpCls}" placeholder="วัตถุประสงค์, target audience, key messages, deliverables...">${esc(a.description || "")}</textarea><small id="ed-count" class="text-[11px] text-on-surface-variant"></small></label>
       <label class="flex flex-col gap-1">${lbl("👥 Stakeholders / Contacts (optional)")}<textarea id="ed-stake" rows="2" class="${inpCls}" placeholder="Account Director: ...&#10;Creative Lead: ...&#10;Client contact: ...">${esc(a.stakeholders || "")}</textarea></label>
-      <div class="flex flex-col gap-1">${lbl("👤 Client (Member)")}<div class="px-sm py-2 bg-surface-container rounded-lg text-[12px] flex items-center justify-between gap-sm"><span class="truncate" style="font-family:'Prompt','Poppins',sans-serif">${esc(a.owner_name || "—")} · ${esc(a.owner_email || "")}</span>${ownerRoleBadge}</div>
+      <div class="flex flex-col gap-1">${lbl("👤 Client (Member)")}<div class="px-sm py-2 bg-surface-container rounded-lg text-[12px] flex items-center justify-between gap-sm"><span class="truncate" style="font-family:'Poppins','Prompt',sans-serif">${esc(a.owner_name || "—")} · ${esc(a.owner_email || "")}</span>${ownerRoleBadge}</div>
         <small class="text-[11px] text-on-surface-variant">เปลี่ยน member ไม่ได้ — ให้ลบแล้วสร้างใหม่ใต้ member อื่น (กัน leak ข้ามลูกค้า)</small></div>
       <label class="flex flex-col gap-1">${lbl("📁 Client Drive Folder URL")}
         <div class="grid gap-sm" style="grid-template-columns:1fr auto"><input id="ed-drive" class="${inpCls}" value="${esc(a.drive_folder_url || "")}" placeholder="https://drive.google.com/drive/folders/..."/>
@@ -641,7 +641,7 @@
 <style>
 :root{--ink:#1a1a1a;--mut:#52525b;--line:#e8e8ea;--gold:#e1121c;--bg:#fafafa;}
 *{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:'Prompt','Poppins',system-ui,sans-serif;padding:40px;}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Poppins','Prompt',system-ui,sans-serif;padding:40px;}
 .wrap{max-width:1200px;margin:0 auto;}
 h1{font-family:'Poppins','Prompt',sans-serif;font-size:30px;font-weight:800;margin:0 0 4px;}
 .sub{color:var(--mut);font-size:14px;margin-bottom:24px;}
