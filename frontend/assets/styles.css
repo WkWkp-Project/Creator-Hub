@@ -425,14 +425,14 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 
 /* Sidebar nav states */
 /* ===== Dark sidebar (charcoal + white text, Wakuwaku W mark) ===== */
-.app-sidebar{ width:290px; box-sizing:border-box; background:#1a1a1d; border-right:1px solid #2e2e33; padding:24px !important; }
+.app-sidebar{ width:290px; box-sizing:border-box; background:#1a1a1d; border-right:1px solid #2e2e33; padding:22px 20px !important; }
 .app-main{ margin-left:290px; }
-.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:9px 4px 7px; min-height:55px; }
+.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:7px 4px 6px; min-height:52px; }
 .sb-brand-logo{ width:100%; max-width:150px; height:41px; object-fit:contain; display:block; }
-.sb-divider{ border-bottom:1px solid #303036; margin:10px 0 24px; }
-.sb-section{ display:flex; flex-direction:column; gap:9px; }
-.sb-section + .sb-section{ margin-top:30px; padding-top:0; }
-.sb-section-title{ font-family:'Space Mono','Prompt',monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:#a9a9b0; padding:0 8px; }
+.sb-divider{ border-bottom:1px solid #303036; margin:8px 0 22px; }
+.sb-section{ display:flex; flex-direction:column; gap:8px; }
+.sb-section + .sb-section{ margin-top:26px; padding-top:0; }
+.sb-section-title{ font-family:'Space Mono','Prompt',monospace; font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:#a9a9b0; padding:0 8px; }
 .sb-logo{ width:42px; height:42px; flex-shrink:0; color:#fff; display:block; }
 .sb-logo svg{ width:100%; height:100%; display:block; }
 /* real logo image — inverted so the black mark shows white on the dark sidebar */
@@ -448,11 +448,12 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 .sb-btn-outline:hover{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.4); }
 .sb-btn-ghost{ background:transparent; color:#c4c4c9; border:1px solid rgba(255,255,255,.12); }
 .sb-btn-ghost:hover{ background:rgba(255,255,255,.06); color:#fff; }
-.sb-tools{ display:flex; flex-direction:column; gap:4px; padding:0 2px 12px; }
+.sb-tools{ display:flex; flex-direction:column; gap:3px; padding:0 2px 10px; }
 .sb-tool-link{ display:flex; align-items:center; gap:8px; width:100%; border:0; background:transparent; color:#c4c4c9;
-  border-radius:8px; padding:8px 16px; font-size:15px; font-weight:700; text-align:left; cursor:pointer; }
+  border-radius:8px; padding:7px 12px; font-size:14px; font-weight:600; text-align:left; cursor:pointer; }
+.app-sidebar .nav-link{ font-size:14px; line-height:1.25; padding:8px 12px !important; gap:10px !important; }
 .nav-link .material-symbols-outlined,
-.sb-tool-link .material-symbols-outlined{ width:22px; min-width:22px; font-size:20px; line-height:1; color:currentColor; }
+.sb-tool-link .material-symbols-outlined{ width:21px; min-width:21px; font-size:19px; line-height:1; color:currentColor; }
 .sb-tool-link:hover{ color:#fff; background:rgba(255,255,255,.06); }
 .sb-tool-link:hover .material-symbols-outlined{ color:#fff; }
 .sb-footer{ border-top:1px solid #2e2e33; }
