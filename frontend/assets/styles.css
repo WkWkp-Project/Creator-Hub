@@ -428,7 +428,7 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 .app-sidebar{ width:296px; box-sizing:border-box; background:#1a1a1d; border-right:1px solid #2e2e33; padding:22px 21px !important; }
 .app-main{ margin-left:296px; }
 .sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:7px 4px 6px; min-height:52px; }
-.sb-brand-logo{ width:100%; max-width:150px; height:41px; object-fit:contain; display:block; }
+.sb-brand-logo{ width:100%; max-width:144px; height:39px; object-fit:contain; display:block; }
 .sb-divider{ border-bottom:1px solid #303036; margin:8px 0 22px; }
 .sb-section{ display:flex; flex-direction:column; gap:8px; }
 .sb-section + .sb-section{ margin-top:26px; padding-top:0; }
