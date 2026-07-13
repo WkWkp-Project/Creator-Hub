@@ -22,7 +22,7 @@ module.exports = {
       borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", "2xl": "1rem", full: "9999px" },
       spacing: { "container-max": "1440px", "3xl": "64px", "xs": "4px", "base": "4px", "md": "16px",
         "2xl": "48px", "sm": "8px", "xl": "32px", "gutter": "24px", "lg": "24px" },
-      fontFamily: { sans: ["Prompt", "Poppins", "sans-serif"], poppins: ["Poppins", "Prompt", "sans-serif"] }
+      fontFamily: { sans: ["Poppins", "Prompt", "sans-serif"], poppins: ["Poppins", "Prompt", "sans-serif"] }
     }
   },
   plugins: [require("@tailwindcss/forms"), require("@tailwindcss/container-queries")]
