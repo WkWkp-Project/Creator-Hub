@@ -165,6 +165,7 @@
           <button class="ca-btn ca-btn-gold" data-new><span class="material-symbols-outlined text-[18px]">add</span>New Campaign</button>
         </div>` : ""}
       </div>
+      <hr class="ca-list-rule" />
       <div class="ca-tabs" id="ca-tabs"></div>
       <div id="ca-groups"></div>
       <div id="ca-pager" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:12px"></div>
@@ -226,7 +227,7 @@
     const tabsHost = wrap.querySelector("#ca-tabs");
     const pagerHost = wrap.querySelector("#ca-pager");
     const PAGE = 24;
-    let skip = 0, activeBrand = "all";
+    let skip = 0, activeBrand = "all", brandSearch = "";
     const sortedBrands = [...brands].sort((x, y) => x.name.localeCompare(y.name));
 
     // group the CURRENT PAGE's items by brand (server already paginated/filtered)
@@ -253,7 +254,9 @@
 
     const renderPage = async () => {
       groupsHost.innerHTML = `<div style="color:#8a8a8f;padding:8px 0">กำลังโหลด…</div>`;
-      const q = `/assets?skip=${skip}&limit=${PAGE}` + (activeBrand !== "all" ? `&brand_id=${activeBrand}` : "");
+      const q = `/assets?skip=${skip}&limit=${PAGE}`
+        + (activeBrand !== "all" ? `&brand_id=${activeBrand}` : "")
+        + (brandSearch ? `&search=${encodeURIComponent(brandSearch)}` : "");
       let data;
       try { data = await api(q); } catch (e) { groupsHost.innerHTML = `<div class="text-error p-md">${esc(e.message)}</div>`; return; }
       const items = data.items || [], total = data.total || 0;
@@ -269,9 +272,18 @@
     };
 
     const filterBar = el(`<div class="ca-filter">
+      <label class="ca-brand-search">
+        <span class="material-symbols-outlined">search</span>
+        <input type="search" placeholder="Search brands..." aria-label="Search brands" />
+      </label>
       <span class="ca-filter-label"><span class="material-symbols-outlined text-[18px]">sell</span>แบรนด์</span>
       <select class="ca-brand-select"><option value="all">ทั้งหมด</option>${sortedBrands.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select>
     </div>`);
+    let brandSearchTimer;
+    filterBar.querySelector("input").addEventListener("input", (e) => {
+      clearTimeout(brandSearchTimer);
+      brandSearchTimer = setTimeout(() => { brandSearch = e.target.value.trim(); skip = 0; renderPage(); }, 250);
+    });
     filterBar.querySelector("select").addEventListener("change", (e) => { activeBrand = e.target.value; skip = 0; renderPage(); });
     tabsHost.appendChild(filterBar);
     await renderPage();
