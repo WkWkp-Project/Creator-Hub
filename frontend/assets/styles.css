@@ -425,14 +425,22 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 
 /* Sidebar nav states */
 /* ===== Dark sidebar (charcoal + white text, Wakuwaku W mark) ===== */
-.app-sidebar{ width:312px; box-sizing:border-box; background:#1a1a1d; border-right:1px solid #2e2e33; padding:24px 0 !important; }
-.app-main{ margin-left:312px; }
-.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:0 24px 24px; min-height:52px; }
+:root{
+  --sb-width:312px;
+  --sb-pad-x:24px;
+  --sb-menu-x:16px;
+  --sb-item-radius:8px;
+  --sb-item-min-h:39px;
+}
+.app-sidebar{ width:var(--sb-width); box-sizing:border-box; background:#1a1a1d; border-right:1px solid #2e2e33; padding:24px 0 !important; }
+.app-main{ margin-left:var(--sb-width); }
+.sb-brand{ display:flex; align-items:center; justify-content:center; gap:12px; padding:2px var(--sb-pad-x) 27px; min-height:45px; }
 .sb-brand-logo{ width:100%; max-width:157px; height:43px; object-fit:contain; display:block; }
-.sb-divider{ border-bottom:1px solid #303036; margin:0 24px 20px; }
-.sb-section{ display:flex; flex-direction:column; gap:8px; padding:0 16px; }
-.sb-section + .sb-section{ margin-top:26px; padding-top:0; }
-.sb-section-title{ font-family:'Space Mono','Prompt',monospace; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#a9a9b0; padding:0 8px; }
+.sb-divider{ border-bottom:1px solid #303036; margin:0 var(--sb-pad-x) 20px; }
+.sb-section{ display:flex; flex-direction:column; gap:9px; padding:0 var(--sb-menu-x); }
+.sb-section + .sb-section{ margin-top:27px; padding-top:0; }
+.sb-section-title{ font-family:'Space Mono','Prompt',monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:#a9a9b0; padding:0 8px; line-height:1; }
+.sb-section nav{ gap:4px !important; }
 .sb-logo{ width:42px; height:42px; flex-shrink:0; color:#fff; display:block; }
 .sb-logo svg{ width:100%; height:100%; display:block; }
 /* real logo image — inverted so the black mark shows white on the dark sidebar */
@@ -448,15 +456,15 @@ body.is-viewer [data-admin-only]{ display:none !important; }
 .sb-btn-outline:hover{ background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.4); }
 .sb-btn-ghost{ background:transparent; color:#c4c4c9; border:1px solid rgba(255,255,255,.12); }
 .sb-btn-ghost:hover{ background:rgba(255,255,255,.06); color:#fff; }
-.sb-tools{ display:flex; flex-direction:column; gap:3px; padding:0 0 10px; }
+.sb-tools{ display:flex; flex-direction:column; gap:4px; padding:0 0 10px; }
 .sb-tool-link{ display:flex; align-items:center; gap:8px; width:100%; border:0; background:transparent; color:#c4c4c9;
-  border-radius:8px; padding:8px 13px; font-size:14.5px; font-weight:600; text-align:left; cursor:pointer; font-family:'Poppins','Prompt',sans-serif; }
-.app-sidebar .nav-link{ font-family:'Poppins','Prompt',sans-serif; font-size:14.5px; line-height:1.25; padding:8px 13px !important; gap:10px !important; }
+  border-radius:var(--sb-item-radius); min-height:var(--sb-item-min-h); padding:8px 14px; font-size:14.5px; line-height:1.25; font-weight:700; text-align:left; cursor:pointer; font-family:'Poppins','Prompt',sans-serif; }
+.app-sidebar .nav-link{ font-family:'Poppins','Prompt',sans-serif; font-size:14.5px; line-height:1.25; min-height:var(--sb-item-min-h); padding:8px 14px !important; gap:8px !important; border-radius:var(--sb-item-radius) !important; font-weight:700; }
 .nav-link .material-symbols-outlined,
-.sb-tool-link .material-symbols-outlined{ width:22px; min-width:22px; font-size:20px; line-height:1; color:currentColor; }
+.sb-tool-link .material-symbols-outlined{ width:20px; min-width:20px; font-size:18px; line-height:1; color:currentColor; }
 .sb-tool-link:hover{ color:#fff; background:rgba(255,255,255,.06); }
 .sb-tool-link:hover .material-symbols-outlined{ color:#fff; }
-.sb-footer{ border-top:1px solid #2e2e33; padding:12px 16px 0 !important; }
+.sb-footer{ border-top:1px solid #2e2e33; padding:12px var(--sb-menu-x) 0 !important; }
 .nav-link{ color:#c4c4c9; }
 .nav-link:hover{ color:#fff; background:rgba(255,255,255,.07); }
 .nav-link.active{ background:#e1121c; color:#fff; font-weight:700; box-shadow:0 4px 14px rgba(225,18,28,.32); }
