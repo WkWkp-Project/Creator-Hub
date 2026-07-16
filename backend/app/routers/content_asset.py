@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..config import get_settings
 from ..content_asset_models import (
     DEFAULT_INPUT_FILES,
     ContentAsset,
@@ -30,8 +31,10 @@ from ..content_asset_models import (
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..directory_models import Brand
+from ..file_validation import validate_spreadsheet_upload
 
 router = APIRouter(prefix="/api/assets", tags=["content-asset"])
+settings = get_settings()
 
 
 def _enforce_company(db: Session, obj: ContentAsset) -> None:
@@ -345,6 +348,7 @@ _KOL_IMPORT_HEADERS = {
     "condition": ("condition", "conditions", "terms"),
     "gencode": ("gencode", "gen code", "code"),
 }
+MAX_KOL_IMPORT_ROWS = 5000
 
 
 def _header_text(value) -> str:
@@ -400,8 +404,8 @@ def _map_kol_headers(ws) -> tuple[int | None, dict[str, int]]:
     return best_row, best_map
 
 
-def _parse_confirmed_kols(raw: bytes) -> list[dict]:
-    wb = openpyxl.load_workbook(io.BytesIO(raw))
+def _parse_confirmed_kols(raw: bytes, max_rows: int = MAX_KOL_IMPORT_ROWS) -> list[dict]:
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
     ws = next((wb[s] for s in wb.sheetnames if "confirm" in s.lower() or "comfirm" in s.lower()), wb.active)
     header_row, header_cols = _map_kol_headers(ws)
     cols = header_cols or _KOL_FIXED_COLS
@@ -458,6 +462,8 @@ def _parse_confirmed_kols(raw: bytes) -> list[dict]:
             "buy_asset": num("buy_asset", r), "outside_shooting": num("outside_shooting", r),
             "condition": (val("condition", r) or ""), "gencode": (val("gencode", r) or ""),
         })
+        if len(rows) > max_rows:
+            raise ValueError(f"KOL import has more than {max_rows} rows")
     return rows
 
 
@@ -475,9 +481,14 @@ async def import_kols(
         raise HTTPException(404, "Content asset not found")
     if not _can_edit(user, obj):
         raise HTTPException(403, "คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (นำเข้าไม่ได้)")
-    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, "รองรับเฉพาะไฟล์ .xlsx")
     raw = await file.read()
+    ext = validate_spreadsheet_upload(
+        file.filename, raw,
+        allowed_extensions={".xlsx"},
+        max_mb=settings.max_upload_mb,
+    )
+    if ext != ".xlsx":
+        raise HTTPException(400, "รองรับเฉพาะไฟล์ .xlsx")
     try:
         kols = _parse_confirmed_kols(raw)
     except Exception as e:  # noqa: BLE001 — surface a friendly parse error

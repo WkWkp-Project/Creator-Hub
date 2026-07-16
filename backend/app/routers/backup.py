@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -41,6 +42,15 @@ _TABLES = {
     "change_logs": models.ChangeLog,
 }
 SNAPSHOT_VERSION = 1
+BACKUP_NAME_RE = re.compile(r"^backup_\d{8}_\d{6}(?:_pre-restore)?\.json$")
+
+
+def _backup_path(filename: str) -> Path:
+    """Resolve a user-supplied backup filename without path traversal."""
+    name = Path(filename or "").name
+    if name != filename or not BACKUP_NAME_RE.fullmatch(name):
+        raise HTTPException(400, "Invalid backup filename")
+    return BACKUP_DIR / name
 
 
 def _serialize(obj) -> dict:
@@ -76,6 +86,19 @@ def _snapshot_payload(db: Session) -> dict:
         "created_at": datetime.now().isoformat(),
         **{name: [_serialize(r) for r in db.query(model).all()] for name, model in _TABLES.items()},
     }
+
+
+def _validate_snapshot_payload(data: dict) -> None:
+    """Refuse malformed snapshots before any destructive restore step."""
+    if not isinstance(data, dict):
+        raise HTTPException(400, "ไฟล์ backup ไม่ถูกต้อง")
+    if data.get("version") != SNAPSHOT_VERSION:
+        raise HTTPException(400, "เวอร์ชัน backup ไม่รองรับ")
+    if not data.get("created_at"):
+        raise HTTPException(400, "ไฟล์ backup ไม่มี created_at")
+    for name in _TABLES:
+        if name not in data or not isinstance(data[name], list):
+            raise HTTPException(400, f"ไฟล์ backup ไม่ครบ: {name}")
 
 
 @router.get("")
@@ -124,7 +147,7 @@ def restore_backup(
 
     filename = (body or {}).get("filename")
     if filename:
-        target = BACKUP_DIR / Path(filename).name  # prevent path traversal
+        target = _backup_path(filename)
         if not target.exists():
             raise HTTPException(404, "ไม่พบไฟล์ backup ที่ระบุ")
     else:
@@ -134,6 +157,7 @@ def restore_backup(
         data = json.loads(target.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"ไฟล์ backup เสียหาย: {exc}") from exc
+    _validate_snapshot_payload(data)
 
     # Safety net: snapshot the current state before overwriting it.
     pre_payload = _snapshot_payload(db)
@@ -161,7 +185,7 @@ def download_backup(
     filename: str,
     _: models.User = Depends(require_admin),
 ):
-    target = BACKUP_DIR / Path(filename).name  # prevent path traversal
+    target = _backup_path(filename)
     if not target.exists():
         raise HTTPException(404, "ไม่พบไฟล์ backup")
     return FileResponse(target, media_type="application/json", filename=target.name)

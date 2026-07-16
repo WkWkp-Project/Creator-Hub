@@ -23,6 +23,7 @@ from .. import crud, models, schemas
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
+from ..file_validation import validate_spreadsheet_upload
 from ..services import column_matcher as cm
 from ..services.tiers import tier_for_followers
 
@@ -32,6 +33,7 @@ settings = get_settings()
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "creatorhub_imports")
 os.makedirs(CACHE_DIR, exist_ok=True)
 MAX_IMPORT_ROWS = 5000   # guard against runaway files (DoS / DB bloat)
+MAX_IMPORT_COLUMNS = 200
 
 
 def _read_dataframe(path: str, filename: str) -> pd.DataFrame:
@@ -39,6 +41,13 @@ def _read_dataframe(path: str, filename: str) -> pd.DataFrame:
     if ext == ".csv":
         return pd.read_csv(path, dtype=str, keep_default_na=False)
     return pd.read_excel(path, dtype=str, keep_default_na=False)
+
+
+def _validate_import_shape(df: pd.DataFrame) -> None:
+    if len(df) > MAX_IMPORT_ROWS:
+        raise HTTPException(400, f"ไฟล์มี {len(df)} แถว เกินลิมิต {MAX_IMPORT_ROWS} แถวต่อครั้ง")
+    if len(df.columns) > MAX_IMPORT_COLUMNS:
+        raise HTTPException(400, f"ไฟล์มี {len(df.columns)} คอลัมน์ เกินลิมิต {MAX_IMPORT_COLUMNS} คอลัมน์ต่อครั้ง")
 
 
 @router.get("/system-fields")
@@ -137,13 +146,12 @@ def template():
 
 @router.post("/preview", response_model=schemas.ImportPreview)
 async def preview(file: UploadFile = File(...), _: models.User = Depends(require_admin)):
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in settings.extensions:
-        raise HTTPException(400, f"Unsupported file type '{ext}'. Allowed: {settings.extensions}")
-
     raw = await file.read()
-    if len(raw) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File exceeds {settings.max_upload_mb}MB limit")
+    ext = validate_spreadsheet_upload(
+        file.filename, raw,
+        allowed_extensions=settings.extensions,
+        max_mb=settings.max_upload_mb,
+    )
 
     upload_id = uuid.uuid4().hex
     stored = os.path.join(CACHE_DIR, f"{upload_id}{ext}")
@@ -157,6 +165,7 @@ async def preview(file: UploadFile = File(...), _: models.User = Depends(require
         df = _read_dataframe(stored, file.filename or "")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not parse file: {exc}") from exc
+    _validate_import_shape(df)
 
     suggestions: list[schemas.ColumnSuggestion] = []
     for col in df.columns:
@@ -199,8 +208,7 @@ def commit(payload: schemas.ImportCommit,
     stored = os.path.join(CACHE_DIR, f"{payload.upload_id}{meta['ext']}")
 
     df = _read_dataframe(stored, meta["filename"])
-    if len(df) > MAX_IMPORT_ROWS:
-        raise HTTPException(400, f"ไฟล์มี {len(df)} แถว เกินลิมิต {MAX_IMPORT_ROWS} แถวต่อครั้ง")
+    _validate_import_shape(df)
 
     # file_column -> system_field (drop unmapped / null targets)
     mapping = {m.file_column: m.system_field for m in payload.mappings if m.system_field}

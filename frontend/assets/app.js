@@ -1744,9 +1744,6 @@
           <label class="flex items-center gap-2 text-[13px] text-on-surface-variant select-none cursor-pointer"><input type="checkbox" id="lg-remember" class="rounded accent-primary"/> จดจำ ID</label>
           <div id="lg-err" class="text-[13px] text-error min-h-[18px]"></div>
           <button id="lg-btn" class="bg-primary text-on-primary font-semibold rounded-lg py-2 hover:bg-primary-container shadow-sm flex items-center justify-center gap-1"><span class="material-symbols-outlined text-[20px]">login</span>เข้าสู่ระบบ</button>
-          <div class="text-[12px] text-on-surface-variant bg-surface-container-low rounded-lg px-sm py-2 leading-relaxed">
-            <b>ทดลองใช้:</b><br/>admin / admin123 (ผู้ดูแล)<br/>viewer / viewer123 (ลูกค้า — ดูอย่างเดียว)
-          </div>
         </div>
       </div>`);
     document.body.appendChild(overlay);

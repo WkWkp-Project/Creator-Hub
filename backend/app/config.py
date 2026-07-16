@@ -11,6 +11,16 @@ _DEFAULT_DB = "sqlite:///" + os.path.join(_BACKEND_DIR, "creatorhub.db").replace
 
 # Sentinel for the insecure dev secret — production must override SECRET_KEY.
 DEFAULT_SECRET = "dev-creatorhub-secret-change-me"
+MIN_SECRET_KEY_LENGTH = 32
+WEAK_SECRET_KEYS = {
+    "secret",
+    "password",
+    "changeme",
+    "change-me",
+    "admin",
+    "creatorhub",
+    DEFAULT_SECRET,
+}
 
 
 class Settings(BaseSettings):
@@ -23,6 +33,7 @@ class Settings(BaseSettings):
 
     # File upload guard rails
     max_upload_mb: int = 10
+    max_json_body_mb: int = 2
     allowed_extensions: str = ".csv,.xlsx,.xls"
 
     app_name: str = "Creator Hub API"
@@ -50,7 +61,23 @@ class Settings(BaseSettings):
 
     @property
     def using_default_secret(self) -> bool:
-        return self.secret_key == DEFAULT_SECRET
+        return (self.secret_key or "").strip() == DEFAULT_SECRET
+
+    @property
+    def secret_policy_error(self) -> str | None:
+        """Return why SECRET_KEY is unsafe for production, or None if acceptable."""
+        secret = (self.secret_key or "").strip()
+        if not secret:
+            return "SECRET_KEY is empty."
+        if secret == DEFAULT_SECRET:
+            return "SECRET_KEY is still the development default."
+        if len(secret) < MIN_SECRET_KEY_LENGTH:
+            return f"SECRET_KEY must be at least {MIN_SECRET_KEY_LENGTH} characters."
+        if secret.lower() in WEAK_SECRET_KEYS:
+            return "SECRET_KEY is too easy to guess."
+        if len(set(secret)) < 8:
+            return "SECRET_KEY has too little character variety."
+        return None
 
     class Config:
         env_file = ".env"

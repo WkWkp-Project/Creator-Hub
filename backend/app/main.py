@@ -22,10 +22,10 @@ init_sentry(os.environ.get("SENTRY_DSN", ""), settings.environment)
 # Fail fast on insecure configuration when ENVIRONMENT=production so a misconfig
 # can never silently ship with forgeable tokens or an open CORS policy.
 if settings.is_production:
-    if settings.using_default_secret:
+    if settings.secret_policy_error:
         raise RuntimeError(
-            "SECRET_KEY is still the development default. Set a strong SECRET_KEY "
-            "env var before running in production."
+            settings.secret_policy_error + " Set a strong SECRET_KEY env var "
+            "before running in production."
         )
     if settings.origins == ["*"]:
         raise RuntimeError(
@@ -50,6 +50,38 @@ app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 # Request-id + structured access logging (added after CORS so it wraps it).
 app.add_middleware(RequestContextMiddleware)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Apply request guard rails + conservative browser security headers."""
+    response = None
+    if request.method in {"POST", "PUT", "PATCH"}:
+        media_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        is_json = media_type == "application/json" or media_type.endswith("+json")
+        try:
+            content_length = int(request.headers.get("content-length") or "0")
+        except ValueError:
+            content_length = 0
+        max_json_bytes = max(1, settings.max_json_body_mb) * 1024 * 1024
+        if is_json and content_length > max_json_bytes:
+            response = Response(
+                content=f'{{"detail":"JSON body exceeds {settings.max_json_body_mb}MB limit."}}',
+                status_code=413,
+                media_type="application/json",
+            )
+    if response is None:
+        response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+    if settings.is_production:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 # Auth uses bearer tokens (not cookies), so credentials need not be allowed —
 # this keeps a wildcard origin valid for local dev while staying safe.

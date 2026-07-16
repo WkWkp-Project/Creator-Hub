@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import crud, models, schemas
+from .. import audit, crud, models, schemas
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from .settings import get_directory_hidden_fields
@@ -134,28 +134,60 @@ def get_influencer(influencer_id: int,
 
 @router.post("", response_model=schemas.InfluencerOut, status_code=201)
 def create_influencer(data: schemas.InfluencerCreate,
-                      _: models.User = Depends(require_admin),
+                      actor: models.User = Depends(require_admin),
                       db: Session = Depends(get_db)):
-    return crud.create(db, data)
+    obj = crud.create(db, data)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=obj.id,
+        user=actor,
+        action="created",
+        summary=f"Created influencer: {obj.name}",
+    )
+    db.commit()
+    return obj
 
 
 @router.put("/{influencer_id}", response_model=schemas.InfluencerOut)
 def update_influencer(
     influencer_id: int, data: schemas.InfluencerUpdate,
-    _: models.User = Depends(require_admin),
+    actor: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     obj = crud.get(db, influencer_id)
     if not obj:
         raise HTTPException(404, "Influencer not found")
-    return crud.update(db, obj, data)
+    changed_fields = sorted(data.model_dump(exclude_unset=True).keys())
+    obj = crud.update(db, obj, data)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=obj.id,
+        user=actor,
+        action="updated",
+        summary=f"Updated influencer: {obj.name}",
+        detail={"fields": changed_fields},
+    )
+    db.commit()
+    return obj
 
 
 @router.delete("/{influencer_id}", status_code=204)
 def delete_influencer(influencer_id: int,
-                      _: models.User = Depends(require_admin),
+                      actor: models.User = Depends(require_admin),
                       db: Session = Depends(get_db)):
     obj = crud.get(db, influencer_id)
     if not obj:
         raise HTTPException(404, "Influencer not found")
+    name = obj.name
     crud.delete(db, obj)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=influencer_id,
+        user=actor,
+        action="deleted",
+        summary=f"Deleted influencer: {name}",
+    )
+    db.commit()

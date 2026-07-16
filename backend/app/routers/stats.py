@@ -59,7 +59,7 @@ def overview(_: models.User = Depends(get_current_user), db: Session = Depends(g
 
 
 @router.get("/niche-performance")
-def niche_performance(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def niche_performance(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Per-niche group comparison across multiple performance dimensions."""
     influencers = db.execute(select(models.Influencer)).scalars().all()
     groups: dict[str, list[models.Influencer]] = {}
@@ -84,16 +84,18 @@ def niche_performance(_: models.User = Depends(get_current_user), db: Session = 
         # Cost efficiency: reach delivered per 1,000 THB of total fee.
         total_fee = sum(m.total_fee for m in members) or 0
         reach_per_1k = (total_reach / total_fee * 1000) if total_fee else 0
-        rows.append({
+        row = {
             "niche": niche,
             "count": n,
             "total_reach": int(total_reach),
             "avg_engagement_rate": round(avg_er, 2),
             "avg_growth_30d": round(avg_growth, 2),
-            "avg_total_fee": round(avg_fee, 2),
             "avg_fit_score": round(avg_quality, 1),
-            "reach_per_1k_thb": round(reach_per_1k, 1),
-        })
+        }
+        if user.role == "admin":
+            row["avg_total_fee"] = round(avg_fee, 2)
+            row["reach_per_1k_thb"] = round(reach_per_1k, 1)
+        rows.append(row)
     rows.sort(key=lambda r: r["total_reach"], reverse=True)
     return {"niches": rows}
 

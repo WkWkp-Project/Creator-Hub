@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import audit, models
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
@@ -104,7 +104,7 @@ def _persist(db: Session, category: str, ext: str, raw: bytes, content_type: str
 
 
 @router.post("/avatar")
-async def upload_avatar(file: UploadFile = File(...), _: models.User = Depends(require_admin),
+async def upload_avatar(file: UploadFile = File(...), actor: models.User = Depends(require_admin),
                         db: Session = Depends(get_db)):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_AVATAR_EXTENSIONS:
@@ -121,12 +121,28 @@ async def upload_avatar(file: UploadFile = File(...), _: models.User = Depends(r
     if not _looks_like_supported_image(raw, ext):
         raise HTTPException(400, "Avatar file does not look like a supported image.")
 
-    stored_name = _persist(db, "avatars", ext, raw, _content_type_for(ext, file.content_type))
+    content_type = _content_type_for(ext, file.content_type)
+    stored_name = _persist(db, "avatars", ext, raw, content_type)
+    audit.record(
+        db,
+        entity="upload",
+        user=actor,
+        action="uploaded",
+        summary=f"Uploaded avatar: {stored_name}",
+        detail={
+            "category": "avatars",
+            "filename": file.filename,
+            "stored_name": stored_name,
+            "content_type": content_type,
+            "size_bytes": len(raw),
+        },
+    )
+    db.commit()
     return {"url": f"/uploads/avatars/{stored_name}"}
 
 
 @router.post("/campaign-media")
-async def upload_campaign_media(file: UploadFile = File(...), _: models.User = Depends(require_admin),
+async def upload_campaign_media(file: UploadFile = File(...), actor: models.User = Depends(require_admin),
                                 db: Session = Depends(get_db)):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_CAMPAIGN_MEDIA_EXTENSIONS:
@@ -149,7 +165,24 @@ async def upload_campaign_media(file: UploadFile = File(...), _: models.User = D
     if not looks_valid:
         raise HTTPException(400, "Campaign media does not look like a supported image or video.")
 
-    stored_name = _persist(db, "campaigns", ext, raw, _content_type_for(ext, file.content_type))
+    content_type = _content_type_for(ext, file.content_type)
+    stored_name = _persist(db, "campaigns", ext, raw, content_type)
+    audit.record(
+        db,
+        entity="upload",
+        user=actor,
+        action="uploaded",
+        summary=f"Uploaded campaign media: {stored_name}",
+        detail={
+            "category": "campaigns",
+            "filename": file.filename,
+            "stored_name": stored_name,
+            "content_type": content_type,
+            "media_type": media_type,
+            "size_bytes": len(raw),
+        },
+    )
+    db.commit()
     return {"url": f"/uploads/campaigns/{stored_name}", "media_type": media_type}
 
 

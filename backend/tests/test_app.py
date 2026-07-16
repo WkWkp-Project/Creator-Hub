@@ -110,7 +110,11 @@ def test_tier_thresholds():
     assert tier_for_followers(0) == "Nano"
     assert tier_for_followers(9_999) == "Nano"
     assert tier_for_followers(10_000) == "Micro"
-    assert tier_for_followers(999_999) == "Micro"
+    assert tier_for_followers(49_999) == "Micro"
+    assert tier_for_followers(50_000) == "Mid-Tier"
+    assert tier_for_followers(99_999) == "Mid-Tier"
+    assert tier_for_followers(100_000) == "Macro"
+    assert tier_for_followers(999_999) == "Macro"
     assert tier_for_followers(1_000_000) == "Mega"
     assert tier_for_followers(5_000_000) == "Mega"
 
@@ -118,7 +122,7 @@ def test_tier_thresholds():
 def test_tier_auto_derived_on_create():
     # No tier supplied -> derived from followers.
     auto = client.post("/api/influencers", json={"name": "Auto Tier", "followers": 50_000}).json()
-    assert auto["tier"] == "Micro"
+    assert auto["tier"] == "Mid-Tier"
     # Explicit tier is respected even if it disagrees with followers.
     manual = client.post("/api/influencers", json={
         "name": "Manual Tier", "followers": 50_000, "tier": "Mega"}).json()
@@ -200,8 +204,12 @@ def test_unauthenticated_is_rejected():
     assert r.status_code == 401
 
 
-def test_viewer_cannot_write_but_can_read():
+def test_viewer_cannot_write_and_needs_directory_access_to_read():
+    assert client.get("/api/influencers", headers=VIEWER).status_code == 403
+    viewer = client.get("/api/auth/me", headers=VIEWER).json()
+    client.put(f"/api/auth/users/{viewer['id']}", json={"directory_access": True})
     assert client.get("/api/influencers", headers=VIEWER).status_code == 200
+    client.put(f"/api/auth/users/{viewer['id']}", json={"directory_access": False})
     forbidden = client.post("/api/influencers", json={"name": "Nope"}, headers=VIEWER)
     assert forbidden.status_code == 403
 
@@ -288,11 +296,44 @@ def test_backup_create_and_restore(tmp_path):
     assert client.post("/api/backup", headers=VIEWER).status_code == 403
 
 
+def test_backup_restore_validates_filename_and_payload(tmp_path):
+    from app.routers import backup as backup_mod
+    backup_mod.BACKUP_DIR = tmp_path
+
+    before = client.get("/api/influencers").json()["total"]
+    malformed = tmp_path / "backup_20260101_000000.json"
+    malformed.write_text('{"version": 1, "created_at": "2026-01-01T00:00:00"}', encoding="utf-8")
+
+    invalid_download = client.get("/api/backup/not-a-backup.json/download")
+    assert invalid_download.status_code == 400
+    traversal = client.post("/api/backup/restore", json={"filename": "../backup_20260101_000000.json"})
+    assert traversal.status_code == 400
+
+    restored = client.post("/api/backup/restore", json={"filename": malformed.name})
+    assert restored.status_code == 400
+    assert client.get("/api/influencers").json()["total"] == before
+
+
 def test_import_commit_rejects_bad_upload_id():
     # path-traversal / malformed ids are refused before touching the filesystem
     bad = client.post("/api/imports/commit", json={
         "upload_id": "../../etc/passwd", "mappings": [{"file_column": "x", "system_field": "name"}]})
     assert bad.status_code == 400
+
+
+def test_import_preview_rejects_spoofed_and_oversized_shapes():
+    spoof = client.post(
+        "/api/imports/preview",
+        files={"file": ("not-excel.xlsx", b"this is not a zip workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert spoof.status_code == 400
+
+    rows = "Name\n" + "\n".join(f"Creator {i}" for i in range(5001))
+    too_many = client.post(
+        "/api/imports/preview",
+        files={"file": ("too-many.csv", rows.encode("utf-8"), "text/csv")},
+    )
+    assert too_many.status_code == 400
 
 
 def test_login_rate_limit():
@@ -452,6 +493,37 @@ def test_confirmed_kols_import_reads_channels_link_hyperlink():
 
     assert len(rows) == 1
     assert rows[0]["profile_link"] == "https://www.tiktok.com/@pimsook.s"
+
+
+def test_confirmed_kols_import_rejects_macro_workbook_and_row_overflow():
+    asset = client.post("/api/assets", json={"campaign_name": "Macro Upload Guard"}).json()
+    macro = client.post(
+        f"/api/assets/{asset['id']}/import-kols",
+        files={"file": ("macro.xlsm", b"PK\x03\x04fake", "application/vnd.ms-excel.sheet.macroEnabled.12")},
+    )
+    assert macro.status_code == 400
+
+    from io import BytesIO
+
+    import openpyxl
+
+    from app.routers.content_asset import _parse_confirmed_kols
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "KOLs Confirmed"
+    ws["A2"] = "KOL Name"
+    ws["A3"] = "One"
+    ws["A4"] = "Two"
+    buf = BytesIO()
+    wb.save(buf)
+    try:
+        _parse_confirmed_kols(buf.getvalue(), max_rows=1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected KOL row overflow to be rejected")
+    client.delete(f"/api/assets/{asset['id']}")
 
 
 def test_members_brands_and_campaign_links():
@@ -663,6 +735,12 @@ def test_token_revocation_on_logout():
     client.delete(f"/api/auth/users/{uid}")
 
 
+def test_query_token_is_limited_to_download_exports():
+    tok = _token("admin", "admin123")
+    assert client.get(f"/api/auth/me?token={tok}", headers={"Authorization": ""}).status_code == 401
+    assert client.get(f"/api/influencers/export?format=csv&token={tok}", headers={"Authorization": ""}).status_code == 200
+
+
 def test_audit_trail_coverage():
     # A login is audited; activity entries carry an immutable actor_id + entity.
     client.post("/api/auth/login", json={"username": "viewer", "password": "viewer123"})
@@ -677,6 +755,33 @@ def test_audit_trail_coverage():
     assert role_change["detail"]["role"] == {"from": "viewer", "to": "manager"}
     assert role_change["actor_id"] is not None   # who did it, by id
     client.delete(f"/api/auth/users/{u['id']}")
+    # Legacy write surfaces are audited too.
+    inf = client.post("/api/influencers", json={"name": "Audit Creator", "followers": 1234}).json()
+    client.put(f"/api/influencers/{inf['id']}", json={"niche": "beauty"})
+    client.delete(f"/api/influencers/{inf['id']}")
+    camp = client.post("/api/campaigns", json={"name": "Audit Campaign", "brand": "Audit"}).json()
+    client.put(f"/api/campaigns/{camp['id']}", json={"status": "active"})
+    client.delete(f"/api/campaigns/{camp['id']}")
+    brief = client.post("/api/content", json={"title": "Audit Brief", "status": "draft"}).json()
+    client.put(f"/api/content/{brief['id']}", json={"status": "approved"})
+    client.delete(f"/api/content/{brief['id']}")
+    png = b"\x89PNG\r\n\x1a\nfake"
+    assert client.post(
+        "/api/uploads/avatar",
+        files={"file": ("audit.png", png, "image/png")},
+    ).status_code == 200
+    acts = client.get("/api/stats/activity?limit=100").json()
+    seen = {(a["entity"], a["action"]) for a in acts}
+    assert ("influencer", "created") in seen
+    assert ("influencer", "updated") in seen
+    assert ("influencer", "deleted") in seen
+    assert ("legacy_campaign", "created") in seen
+    assert ("legacy_campaign", "updated") in seen
+    assert ("legacy_campaign", "deleted") in seen
+    assert ("content", "created") in seen
+    assert ("content", "updated") in seen
+    assert ("content", "deleted") in seen
+    assert ("upload", "uploaded") in seen
 
 
 def test_list_pagination_and_brand_filter():
@@ -700,8 +805,12 @@ def test_internal_endpoints_are_admin_only():
     # A viewer (external customer) must NOT read org-wide budgets/financials or backups.
     assert client.get("/api/stats/campaign-budgets", headers=VIEWER).status_code == 403
     assert client.get("/api/stats/financials", headers=VIEWER).status_code == 403
+    viewer_np = client.get("/api/stats/niche-performance", headers=VIEWER).json()["niches"]
+    assert all("avg_total_fee" not in r and "reach_per_1k_thb" not in r for r in viewer_np)
     # admin still can
     assert client.get("/api/stats/campaign-budgets").status_code == 200
+    admin_np = client.get("/api/stats/niche-performance").json()["niches"]
+    assert all("avg_total_fee" in r and "reach_per_1k_thb" in r for r in admin_np)
 
 
 def test_unsafe_url_neutralised_on_save():
@@ -724,7 +833,15 @@ def test_unsafe_url_neutralised_on_save():
 def test_readiness_and_request_id():
     r = client.get("/api/ready")
     assert r.status_code == 200 and r.json()["database"] == "ok"
-    assert client.get("/api/health").status_code == 200
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.headers["X-Content-Type-Options"] == "nosniff"
+    assert health.headers["X-Frame-Options"] == "DENY"
+    assert health.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "camera=()" in health.headers["Permissions-Policy"]
+    assert health.headers["Cache-Control"] == "no-store"
+    assert health.headers["Pragma"] == "no-cache"
+    assert "Strict-Transport-Security" not in health.headers
     # every response carries a correlation id
     assert client.get("/api/health").headers.get("X-Request-ID")
     # a caller-supplied id is propagated back
@@ -732,14 +849,34 @@ def test_readiness_and_request_id():
     assert client.get("/api/health", headers={"X-Request-ID": rid}).headers.get("X-Request-ID") == rid
 
 
+def test_json_body_size_limit():
+    oversized = b'{"payload":"' + (b"x" * (2 * 1024 * 1024 + 1)) + b'"}'
+    r = client.post(
+        "/api/auth/login",
+        content=oversized,
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 413
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["Cache-Control"] == "no-store"
+    assert "JSON body exceeds" in r.json()["detail"]
+
+
 def test_production_config_flags():
-    from app.config import Settings, DEFAULT_SECRET
+    from app.config import MIN_SECRET_KEY_LENGTH, Settings, DEFAULT_SECRET
     insecure = Settings(environment="production", secret_key=DEFAULT_SECRET, _env_file=None)
-    assert insecure.is_production and insecure.using_default_secret  # would fail-fast at boot
-    secure = Settings(environment="production", secret_key="a-real-strong-secret",
+    assert insecure.is_production and insecure.using_default_secret
+    assert insecure.secret_policy_error  # would fail-fast at boot
+    short_secret = Settings(environment="production", secret_key="a-real-strong-secret", _env_file=None)
+    assert short_secret.secret_policy_error
+    repetitive_secret = Settings(environment="production", secret_key="a" * MIN_SECRET_KEY_LENGTH, _env_file=None)
+    assert repetitive_secret.secret_policy_error
+    secure_secret = "CreatorHub-prod-secret-2026-rotate-me-now"
+    secure = Settings(environment="production", secret_key=secure_secret,
                       cors_origins="https://app.example.com", _env_file=None)
-    assert not secure.using_default_secret and secure.origins == ["https://app.example.com"]
+    assert not secure.using_default_secret and secure.secret_policy_error is None
+    assert secure.origins == ["https://app.example.com"]
     # Production must refuse SQLite (ephemeral / single-writer) — the boot guard.
-    on_sqlite = Settings(environment="production", secret_key="a-real-strong-secret",
+    on_sqlite = Settings(environment="production", secret_key=secure_secret,
                          database_url="sqlite:///./x.db", _env_file=None)
     assert on_sqlite.is_production and on_sqlite.database_url.lower().startswith("sqlite")
