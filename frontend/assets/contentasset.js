@@ -57,10 +57,19 @@
   }
 
   // Directory caches (brands + members) for grouping/labels.
-  let brands = [], members = [];
-  const loadDirectory = async () => {
-    try { brands = await api("/brands"); } catch (_) { brands = []; }
-    try { members = await api("/members"); } catch (_) { members = []; }
+  let brands = [], members = [], directoryLoadedAt = 0, directoryPromise = null;
+  const loadDirectory = async (force = false) => {
+    if (!force && directoryLoadedAt && Date.now() - directoryLoadedAt < 30000) return;
+    if (!force && directoryPromise) return directoryPromise;
+    directoryPromise = Promise.all([
+      api("/brands").catch(() => []),
+      api("/members").catch(() => []),
+    ]).then(([nextBrands, nextMembers]) => {
+      brands = nextBrands;
+      members = nextMembers;
+      directoryLoadedAt = Date.now();
+    }).finally(() => { directoryPromise = null; });
+    return directoryPromise;
   };
   const brandName = (id) => brands.find((b) => b.id === id)?.name || "";
   const brandLogo = (id) => brands.find((b) => b.id === id)?.logo_url || "";
@@ -128,6 +137,7 @@
     // shared helpers
     api, el, esc, toast, isAdmin, render, fmtNum, uploadFile, mediaSrc,
     modal, inpCls, lbl, sectionAFiles,
+    openExportModal: openCampaignExportModal,
     money: (n) => "฿" + (Number(n) || 0).toLocaleString("en-US"),
     // Optimistic-concurrency aware: pass the asset object `a` so the loaded
     // row_version rides along (and the fresh version is tracked back onto it).
@@ -150,9 +160,67 @@
     canEdit: (a) => {
       const u = CH.user || {};
       if (u.role === "admin") return true;
+      if (a && typeof a.can_edit === "boolean") return a.can_edit;
       return u.role === "manager" && Array.isArray(a && a.assigned_user_ids) && a.assigned_user_ids.includes(u.id);
     },
   });
+
+  async function openCampaignExportModal(assetId = null) {
+    let campaigns = [];
+    try {
+      if (assetId) campaigns = [await api("/assets/" + assetId)];
+      else campaigns = (await api("/assets/summaries?limit=500")).items || [];
+    } catch (e) {
+      return toast(e.message, "err");
+    }
+    campaigns = campaigns.filter((a) => CA.canEdit(a));
+    if (!campaigns.length) return toast("You do not have permission to export a campaign.", "err");
+
+    const options = campaigns.map((a) =>
+      `<option value="${a.id}">${esc(a.campaign_name)}${a.client_name ? " - " + esc(a.client_name) : ""}</option>`
+    ).join("");
+    const formats = [
+      { value: "pdf", icon: "picture_as_pdf", title: "PDF Report", detail: "Multi-page visual campaign report ready to share" },
+      { value: "png", icon: "image", title: "PNG Snapshot", detail: "High-resolution visual summary in one image" },
+      { value: "xlsx", icon: "table_view", title: "Excel Workbook", detail: "Summary, KOL plan, performance and input files" },
+      { value: "csv", icon: "csv", title: "CSV Asset List", detail: "KOL plan in a spreadsheet-ready CSV file" },
+      { value: "json", icon: "data_object", title: "JSON Data", detail: "Campaign data and activity log for handoff or archive" },
+    ];
+    const formatCards = formats.map((f, i) => `<button type="button" data-export-format="${f.value}" aria-pressed="${i === 0}" style="text-align:left;border:1px solid ${i === 0 ? "#171719" : "#d9d6cf"};border-radius:8px;padding:14px;background:#fff;min-height:112px">
+      <span class="material-symbols-outlined" style="font-size:22px">${f.icon}</span>
+      <strong style="display:block;margin-top:7px;font-size:14px">${f.title}</strong>
+      <span style="display:block;margin-top:4px;color:#6f7078;font-size:12px;line-height:1.4">${f.detail}</span>
+    </button>`).join("");
+
+    const m = modal("Export Campaign", "ios_share", `
+      <p style="font-size:12px;color:#6f7078;margin:0">Choose a campaign and an export format. Only campaigns you can manage are listed.</p>
+      <label style="display:flex;flex-direction:column;gap:6px">
+        <span style="font-size:12px;font-weight:600;color:#555861">Campaign</span>
+        <select data-export-campaign class="${inpCls}">${options}</select>
+      </label>
+      <div data-export-formats style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">${formatCards}</div>
+    `, `<button data-close class="ml-auto px-md py-2 rounded-lg font-semibold text-on-surface-variant hover:bg-surface-container-low">Close</button>
+      <button data-download class="ca-btn ca-btn-gold"><span class="material-symbols-outlined text-[18px]">download</span>Download</button>`, "max-w-3xl");
+
+    let selectedFormat = "pdf";
+    m.querySelectorAll("[data-export-format]").forEach((card) => card.addEventListener("click", () => {
+      selectedFormat = card.dataset.exportFormat;
+      m.querySelectorAll("[data-export-format]").forEach((item) => {
+        const selected = item === card;
+        item.setAttribute("aria-pressed", String(selected));
+        item.style.borderColor = selected ? "#171719" : "#d9d6cf";
+        item.style.boxShadow = selected ? "0 0 0 1px #171719" : "none";
+      });
+    }));
+    m.querySelector("[data-download]").addEventListener("click", () => {
+      const id = Number(m.querySelector("[data-export-campaign]").value);
+      if (!id) return toast("Please select a campaign.", "err");
+      const tokenQ = CH.token ? "&token=" + encodeURIComponent(CH.token) : "";
+      window.open(`${window.API_BASE || ""}/api/assets/${id}/export?format=${selectedFormat}${tokenQ}`, "_blank", "noopener");
+      toast(`Exporting campaign as ${selectedFormat.toUpperCase()}...`);
+      m.remove();
+    });
+  }
 
   // ============================================================ LIST ROUTE ===
   route("assets", async (view) => {
@@ -173,39 +241,26 @@
     view.appendChild(wrap);
 
     const kolProgress = (a) => {
-      const k = a.kols || [];
-      if (!k.length) return "";
-      const ap = k.filter((x) => x.client_approved === "Approve").length;
-      const po = k.filter((x) => x.client_approved === "Posted").length;
-      const pct = (n) => Math.round((n / k.length) * 100);
+      if (!a.kol_count) return "";
+      const ap = a.approved_count || 0;
+      const po = a.posted_count || 0;
+      const pct = (n) => Math.round((n / a.kol_count) * 100);
       return `<div style="margin-top:10px">
         <div style="display:flex;height:6px;border-radius:9999px;overflow:hidden;background:#ececf0">
           <span style="width:${pct(ap)}%;background:#16a34a"></span><span style="width:${pct(po)}%;background:#f59e0b"></span>
         </div>
-        <div style="font-size:11px;color:#8a8a8f;margin-top:5px">📋 ${ap} อนุมัติ · ${po} โพสต์ · ${k.length} KOL</div>
+        <div style="font-size:11px;color:#8a8a8f;margin-top:5px">📋 ${ap} อนุมัติ · ${po} โพสต์ · ${a.kol_count} KOL</div>
       </div>`;
     };
     const deadlineBadge = (a) => {
       if (isClosedStatus(a.status)) return "";
-      const kols = a.kols || [];
-      if (!kols.length) return "";
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const parse = (s) => { if (!s || !/^\d{4}-\d{2}-\d{2}/.test(s)) return null; const d = new Date(s); return isNaN(d) ? null : d; };
-      let overdue = 0, soon = 0;
-      kols.forEach((k) => {
-        if (k.client_approved === "Approve") return;   // already done
-        const d = parse(k.post_date) || parse(k.period_to);
-        if (!d) return;
-        const days = Math.round((d - today) / 86400000);
-        if (days < 0) overdue++; else if (days <= 7) soon++;
-      });
+      const overdue = a.overdue_count || 0;
+      const soon = a.soon_count || 0;
       if (overdue) return `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#b80f18">⚠ ${overdue} งานเลยกำหนด</div>`;
       if (soon) return `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#9a6700">🕒 ${soon} งานใกล้ถึงกำหนด (7 วัน)</div>`;
       return "";
     };
     const card = (a) => {
-      const slots = sectionAFiles(a);
-      const linked = slots.filter((f) => f.linked).length;
       const lead = leadLabel(a);
       const c = el(`<div class="ca-card" style="cursor:pointer">
         <div class="ca-card-head">
@@ -216,7 +271,7 @@
         </div>
         <div class="ca-card-foot">
           <span class="ca-unlinked" style="font-family:'Poppins','Prompt',sans-serif;font-size:11px">${STATUS_LABEL[a.status] || a.status}</span>
-          <span class="ca-linked">${linked} of ${slots.length} linked</span>
+          <span class="ca-linked">${a.linked_file_count || 0} of ${a.input_file_count || 0} linked</span>
         </div>
       </div>`);
       c.addEventListener("click", () => (location.hash = `#/asset/${a.id}`));
@@ -227,7 +282,7 @@
     const tabsHost = wrap.querySelector("#ca-tabs");
     const pagerHost = wrap.querySelector("#ca-pager");
     const PAGE = 24;
-    let skip = 0, activeBrand = "all", brandSearch = "";
+    let skip = 0, activeBrand = "all", brandSearch = "", pageRequestGen = 0;
     const sortedBrands = [...brands].sort((x, y) => x.name.localeCompare(y.name));
 
     // group the CURRENT PAGE's items by brand (server already paginated/filtered)
@@ -253,12 +308,18 @@
     };
 
     const renderPage = async () => {
+      const requestGen = ++pageRequestGen;
       groupsHost.innerHTML = `<div style="color:#8a8a8f;padding:8px 0">กำลังโหลด…</div>`;
-      const q = `/assets?skip=${skip}&limit=${PAGE}`
+      const q = `/assets/summaries?skip=${skip}&limit=${PAGE}`
         + (activeBrand !== "all" ? `&brand_id=${activeBrand}` : "")
         + (brandSearch ? `&search=${encodeURIComponent(brandSearch)}` : "");
       let data;
-      try { data = await api(q); } catch (e) { groupsHost.innerHTML = `<div class="text-error p-md">${esc(e.message)}</div>`; return; }
+      try { data = await api(q); } catch (e) {
+        if (requestGen !== pageRequestGen) return;
+        groupsHost.innerHTML = `<div class="text-error p-md">${esc(e.message)}</div>`;
+        return;
+      }
+      if (requestGen !== pageRequestGen) return;
       const items = data.items || [], total = data.total || 0;
       renderGroupsFor(items);
       const from = total ? skip + 1 : 0, to = skip + items.length;
@@ -293,19 +354,21 @@
 
   // ========================================================== BRAND ROUTE ===
   route("brand", async (view, id) => {
-    await loadDirectory();
     const bid = Number(id);
+    const [, data] = await Promise.all([
+      loadDirectory(),
+      api("/assets/summaries?brand_id=" + bid + "&limit=500"),
+    ]);
     const b = brands.find((x) => x.id === bid);
-    const data = await api("/assets?brand_id=" + bid + "&limit=500");
     const camps = data.items;
     const num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
-    const budget = (a) => (a.kols || []).reduce((s, k) => s + num(k.rate) + num(k.gen_code_price) + num(k.boosting_cost), 0);
+    const budget = (a) => num(a.budget_total);
     const money = (n) => "฿" + Math.round(n).toLocaleString("en-US");
     const total = camps.reduce((s, a) => s + budget(a), 0);
     const logo = b && brandLogo(b.id);
     const rows = camps.length ? camps.map((a) => `<div class="brand-camp-row" data-go="#/asset/${a.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #ececf0;cursor:pointer">
         <div style="min-width:0"><div style="font-weight:700" class="truncate">${esc(a.campaign_name)}</div>
-          <div style="font-size:12px;color:#8a8a8f">${esc(STATUS_LABEL[a.status] || a.status)} · ${(a.kols || []).length} KOL · ${esc(a.period_start || "—")} → ${esc(a.period_end || "—")}</div></div>
+          <div style="font-size:12px;color:#8a8a8f">${esc(STATUS_LABEL[a.status] || a.status)} · ${a.kol_count || 0} KOL · ${esc(a.period_start || "—")} → ${esc(a.period_end || "—")}</div></div>
         <div style="font-weight:800;white-space:nowrap;font-family:'Poppins'">${money(budget(a))}</div>
       </div>`).join("") : `<div style="color:#8a8a8f;padding:14px 0">ยังไม่มีแคมเปญใต้แบรนด์นี้</div>`;
     const wrap = el(`<div class="ca-root">
@@ -327,9 +390,8 @@
   // ========================================================== DETAIL ROUTE ===
   // Header + summary, then each registered section (A, B, C, ...) in order.
   route("asset", async (view, id) => {
-    const a = await api("/assets/" + id);
+    const [a] = await Promise.all([api("/assets/" + id), loadDirectory()]);
     activeAssetRef = a; recordVersion(a);   // snapshot the opened state for the version log
-    await loadDirectory();
     const brand = brandName(a.brand_id), lead = leadLabel(a);
     const lastSaved = (() => { try { return new Date(a.updated_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }); } catch { return "—"; } })();
     const summaryItem = (label, value) => `<div class="ca-summary-item"><div class="ca-label">${label}</div><div class="ca-summary-v">${value}</div></div>`;

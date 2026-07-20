@@ -79,6 +79,10 @@ async def security_headers(request, call_next):
     if request.url.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
         response.headers.setdefault("Pragma", "no-cache")
+    elif request.query_params.get("v"):
+        # Frontend assets use explicit cache-busting versions (?v=N). Keep those
+        # immutable so repeat visits avoid re-downloading the large JS/CSS files.
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
     if settings.is_production:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response

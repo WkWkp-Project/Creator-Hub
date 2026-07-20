@@ -19,6 +19,7 @@ pydantic-settings>=2.6.1
 python-multipart>=0.0.17
 pandas>=2.2.4
 openpyxl>=3.1.5
+Pillow>=11.0.0
 
 # ── Fuzzy matching (import dedupe / search) ──────────────────────────────────
 rapidfuzz>=3.10.1

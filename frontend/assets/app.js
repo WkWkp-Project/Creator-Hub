@@ -189,10 +189,25 @@
   // in if it's still the current render; a superseded render is discarded whole,
   // so its late async appends go to a detached node no one sees.
   let renderGen = 0;
+  function syncContextualExport(hash) {
+    const button = document.querySelector('[data-action="export"]');
+    if (!button) return;
+    const routeName = parseHash(hash)[0];
+    const campaignRoute = ["assets", "asset", "brand"].includes(routeName);
+    const directoryRoute = ["directory", "influencer"].includes(routeName);
+    const canExportCampaign = campaignRoute && ["admin", "manager"].includes(auth?.user?.role);
+    const canExportDirectory = directoryRoute && isAdmin();
+    button.hidden = !(canExportCampaign || canExportDirectory);
+    button.dataset.exportContext = canExportCampaign ? "campaign" : (canExportDirectory ? "directory" : "");
+    const label = button.querySelector("[data-export-label]");
+    if (label) label.textContent = canExportCampaign ? "Export Campaign" : "Export Directory";
+  }
+
   async function render() {
     const gen = ++renderGen;
     const hash = location.hash || "#/directory";
     recordNav(hash);
+    syncContextualExport(hash);
     const [path, param] = hash.replace(/^#/, "").split("/").filter(Boolean).length
       ? parseHash(hash) : ["directory", null];
     // sidebar active state
@@ -513,29 +528,15 @@
     view.appendChild(el(`<div class="flex items-end justify-between flex-wrap gap-md">
       <div><h1 class="text-[32px] font-semibold tracking-tight">Dashboard</h1><p class="text-on-surface-variant mt-xs">ภาพรวมแคมเปญ · งบ · งานที่ต้องสนใจ</p></div>
       <button data-route="#/assets" class="bg-primary text-on-primary font-semibold rounded-lg py-2 px-md hover:bg-primary-container shadow-sm flex items-center gap-1"><span class="material-symbols-outlined text-[20px]">grid_view</span>ไปที่แคมเปญ</button></div>`));
-    let cb = { total: 0 }, assetsR = { items: [] }, activity = [];
-    if (isAdmin()) { try { cb = await api("/stats/campaign-budgets"); } catch (_) {} }
-    try { assetsR = await api("/assets?limit=500"); } catch (_) {}
-    try { activity = await api("/stats/activity?limit=10"); } catch (_) {}  // admin-only → [] otherwise
-    const items = assetsR.items || [];
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const parse = (s) => { if (!s || !/^\d{4}-\d{2}-\d{2}/.test(s)) return null; const d = new Date(s); return isNaN(d) ? null : d; };
-    let pending = 0, overdue = 0; const attention = [];
-    items.forEach((a) => {
-      let ao = 0, as_ = 0;
-      const closed = isClosedCampaignStatus(a.status);
-      (a.kols || []).forEach((k) => {
-        if (k.client_approved === "Pending") pending++;
-        if (!closed && k.client_approved !== "Approve") { const d = parse(k.post_date) || parse(k.period_to); if (d) { const dd = Math.round((d - today) / 86400000); if (dd < 0) { overdue++; ao++; } else if (dd <= 7) as_++; } }
-      });
-      if (!closed && (ao || as_)) attention.push({ a, overdue: ao, soon: as_ });
-    });
-    const active = items.filter((a) => a.status === "active").length;
+    const [dashboard, activity] = await Promise.all([
+      api("/assets/dashboard").catch(() => ({ active: 0, pending: 0, overdue: 0, budget_total: 0, attention: [] })),
+      isAdmin() ? api("/stats/activity?limit=10").catch(() => []) : [],
+    ]);
     const money = (n) => "฿" + Math.round(n || 0).toLocaleString("en-US");
     const stat = (label, val, icon) => `<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg flex items-center gap-md"><div class="w-12 h-12 rounded-xl bg-primary-fixed flex items-center justify-center"><span class="material-symbols-outlined text-primary">${icon}</span></div><div><div class="text-[26px] font-extrabold leading-none font-poppins">${val}</div><div class="text-[13px] text-on-surface-variant font-semibold mt-1">${label}</div></div></div>`;
-    view.appendChild(el(`<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter">${isAdmin() ? stat("งบแคมเปญรวม", money(cb.total), "payments") : ""}${stat("แคมเปญ Active", active, "grid_view")}${stat("KOL รออนุมัติ", pending, "pending_actions")}${stat("งานเลยกำหนด", overdue, "warning")}</section>`));
-    const attRows = attention.sort((x, y) => (y.overdue - x.overdue) || (y.soon - x.soon)).slice(0, 8).map(({ a, overdue, soon }) =>
-      `<div data-route="#/asset/${a.id}" class="flex justify-between items-center gap-md py-2.5 border-b border-outline-variant/60 cursor-pointer hover:bg-surface-container-low/40 px-sm rounded-lg"><div class="min-w-0"><div class="font-semibold truncate">${esc(a.campaign_name)}</div><div class="text-[12px] text-on-surface-variant truncate">${esc(a.client_name || "")}</div></div><div class="text-[12px] font-bold whitespace-nowrap">${overdue ? `<span style="color:#b80f18">⚠ ${overdue}</span>` : ""}${overdue && soon ? " · " : ""}${soon ? `<span style="color:#9a6700">🕒 ${soon}</span>` : ""}</div></div>`).join("") || `<div class="text-[13px] text-on-surface-variant">ไม่มีงานค้าง 🎉</div>`;
+    view.appendChild(el(`<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter">${isAdmin() ? stat("งบแคมเปญรวม", money(dashboard.budget_total), "payments") : ""}${stat("แคมเปญ Active", dashboard.active, "grid_view")}${stat("KOL รออนุมัติ", dashboard.pending, "pending_actions")}${stat("งานเลยกำหนด", dashboard.overdue, "warning")}</section>`));
+    const attRows = (dashboard.attention || []).map((a) =>
+      `<div data-route="#/asset/${a.id}" class="flex justify-between items-center gap-md py-2.5 border-b border-outline-variant/60 cursor-pointer hover:bg-surface-container-low/40 px-sm rounded-lg"><div class="min-w-0"><div class="font-semibold truncate">${esc(a.campaign_name)}</div><div class="text-[12px] text-on-surface-variant truncate">${esc(a.client_name || "")}</div></div><div class="text-[12px] font-bold whitespace-nowrap">${a.overdue ? `<span style="color:#b80f18">⚠ ${a.overdue}</span>` : ""}${a.overdue && a.soon ? " · " : ""}${a.soon ? `<span style="color:#9a6700">🕒 ${a.soon}</span>` : ""}</div></div>`).join("") || `<div class="text-[13px] text-on-surface-variant">ไม่มีงานค้าง 🎉</div>`;
     const actRows = (activity || []).map((v) => `<div class="flex items-start gap-sm py-2 border-b border-outline-variant/50"><span class="material-symbols-outlined text-[16px] text-on-surface-variant mt-0.5">${v.action === "created" ? "add_circle" : v.action === "deleted" ? "delete" : "edit"}</span><div class="min-w-0"><div class="text-[13px] truncate">${esc(v.summary || v.action)}</div><div class="text-[11px] text-on-surface-variant">${esc(v.actor || "")} · ${(() => { try { return new Date(v.at).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) { return ""; } })()}</div></div></div>`).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
     const panel = (title, icon, inner) => `<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg"><h3 class="text-[18px] font-semibold mb-md flex items-center gap-sm"><span class="material-symbols-outlined text-primary">${icon}</span>${title}</h3>${inner}</div>`;
     const grid = el(`<section class="grid grid-cols-1 lg:grid-cols-2 gap-gutter"></section>`);
@@ -1644,6 +1645,13 @@
     if (a.dataset.action === "import") openImportModal();
     if (a.dataset.action === "add-influencer") openInfluencerForm();
     if (a.dataset.action === "export") {
+      if (a.dataset.exportContext === "campaign") {
+        const [routeName, routeParam] = parseHash(location.hash || "#/assets");
+        const assetId = routeName === "asset" ? Number(routeParam) : null;
+        if (!window.CA?.openExportModal) return toast("Campaign export is not ready. Please reload.", "err");
+        window.CA.openExportModal(assetId || null);
+        return;
+      }
       const tokenQ = auth?.token ? "&token=" + encodeURIComponent(auth.token) : "";
       window.open(API + "/influencers/export?format=xlsx" + tokenQ, "_blank");
       toast("Exporting roster to Excel…");
@@ -1675,7 +1683,7 @@
   (function wireGlobalSearch() {
     const input = $("#global-search");
     if (!input) return;
-    let dd = null;
+    let dd = null, searchRequestGen = 0;
     const closeDD = () => { if (dd) { dd.remove(); dd = null; } };
     const goDirectory = () => {
       filterState.search = input.value.trim();
@@ -1699,14 +1707,16 @@
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") goDirectory(); });
     input.addEventListener("input", (e) => {
       clearTimeout(searchTimer);
+      const requestGen = ++searchRequestGen;
       const q = e.target.value.trim();
       searchTimer = setTimeout(async () => {
         if (q.length < 2) { closeDD(); return; }
         const eq = encodeURIComponent(q);
         const [camps, infs] = await Promise.all([
-          api("/assets?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
+          api("/assets/summaries?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
           api("/influencers?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
         ]);
+        if (requestGen !== searchRequestGen) return;
         const row = (icon, title, sub, go) => `<button data-go="${go}" class="w-full text-left px-md py-2 hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px] text-on-surface-variant">${icon}</span><span class="min-w-0"><span class="block font-semibold truncate">${esc(title)}</span><span class="block text-[12px] text-on-surface-variant truncate">${esc(sub)}</span></span></button>`;
         const head = (t) => `<div class="px-md pt-2 pb-1 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wide">${t}</div>`;
         let html = "";

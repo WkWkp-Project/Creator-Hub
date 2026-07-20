@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User  # noqa: E402
-from app.security import hash_password  # noqa: E402
+from app.security import create_token, hash_password  # noqa: E402
 from app.services.column_matcher import coerce, match_column  # noqa: E402
 from app.services.tiers import tier_for_followers  # noqa: E402
 
@@ -274,26 +274,68 @@ def test_stats_endpoints():
     assert "roster_value" in fin and "fee_composition" in fin
 
 
-def test_backup_create_and_restore(tmp_path):
+def test_backup_create_and_restore(tmp_path, monkeypatch):
     # Redirect backups to a temp dir so tests never touch real local backups.
     from app.routers import backup as backup_mod
+    from app.routers import uploads as uploads_mod
     backup_mod.BACKUP_DIR = tmp_path
+    avatar_dir = tmp_path / "uploads"
+    avatar_dir.mkdir()
+    monkeypatch.setitem(uploads_mod._CATEGORY_DIR, "avatars", avatar_dir)
+
+    # Include business data and binary media that older snapshots omitted.
+    brief = client.post("/api/content", json={"title": "Backup Brief", "notes": "round trip"}).json()
+    uploaded = client.post(
+        "/api/uploads/avatar",
+        files={"file": ("backup.png", b"\x89PNG\r\n\x1a\nbackup-bytes", "image/png")},
+    ).json()
 
     # snapshot current state
     snap = client.post("/api/backup")
     assert snap.status_code == 201
+    assert snap.json()["counts"]["content_briefs"] >= 1
+    assert snap.json()["counts"]["uploaded_files"] >= 1
+    import json
+    backup_path = tmp_path / snap.json()["filename"]
+    payload_text = backup_path.read_text(encoding="utf-8")
+    payload = json.loads(payload_text)
+    assert payload["version"] == 2
+    assert any(row["content"]["encoding"] == "base64" for row in payload["uploaded_files"])
+    assert "password_hash" not in payload_text
+    assert backup_path.with_suffix(".json.meta").exists()
+    listed = client.get("/api/backup").json()["backups"][0]
+    assert listed["counts"]["uploaded_files"] >= 1
     before = client.get("/api/influencers").json()["total"]
     # add a throwaway influencer, then restore the snapshot to remove it
     created = client.post("/api/influencers", json={"name": "Backup Victim", "followers": 1234}).json()
+    client.delete(f"/api/content/{brief['id']}")
+    from app.models import UploadedFile
+    media_path = uploaded["url"].removeprefix("/uploads/")
+    db = SessionLocal()
+    db.query(UploadedFile).filter(UploadedFile.path == media_path).delete()
+    db.commit()
+    db.close()
+    cached_upload = avatar_dir / os.path.basename(media_path)
+    cached_upload.unlink(missing_ok=True)
     assert client.get("/api/influencers").json()["total"] == before + 1
     restored = client.post("/api/backup/restore", json={})
     assert restored.status_code == 200
     assert client.get("/api/influencers").json()["total"] == before
     # the throwaway record is gone after recall
     assert client.get(f"/api/influencers/{created['id']}").status_code == 404
+    assert client.get(f"/api/content/{brief['id']}").status_code == 200
+    assert client.get(uploaded["url"]).content == b"\x89PNG\r\n\x1a\nbackup-bytes"
+    assert cached_upload.exists()  # durable DB copy rehydrates the fast local cache
     # backups are admin-only
     assert client.get("/api/backup", headers=VIEWER).status_code == 403
     assert client.post("/api/backup", headers=VIEWER).status_code == 403
+
+    # Keep the shared test database tidy after proving the round trip.
+    client.delete(f"/api/content/{brief['id']}")
+    db = SessionLocal()
+    db.query(UploadedFile).filter(UploadedFile.path == media_path).delete()
+    db.commit()
+    db.close()
 
 
 def test_backup_restore_validates_filename_and_payload(tmp_path):
@@ -312,6 +354,51 @@ def test_backup_restore_validates_filename_and_payload(tmp_path):
     restored = client.post("/api/backup/restore", json={"filename": malformed.name})
     assert restored.status_code == 400
     assert client.get("/api/influencers").json()["total"] == before
+
+
+def test_backup_restore_rejects_account_assignment_collision(tmp_path):
+    import json
+    from app.routers import backup as backup_mod
+    backup_mod.BACKUP_DIR = tmp_path
+
+    viewer_id = client.get("/api/auth/me", headers=VIEWER).json()["id"]
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Account Ref Guard",
+        "assigned_user_ids": [viewer_id],
+    }).json()
+    snap = client.post("/api/backup").json()
+    path = tmp_path / snap["filename"]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    next(row for row in payload["account_refs"] if row["id"] == viewer_id)["username"] = "different-user"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rejected = client.post("/api/backup/restore", json={"filename": snap["filename"]})
+    assert rejected.status_code == 409
+    assert client.get(f"/api/assets/{asset['id']}").status_code == 200
+    client.delete(f"/api/assets/{asset['id']}")
+
+
+def test_legacy_v1_backup_does_not_clear_newer_tables(tmp_path):
+    import json
+    from app.routers import backup as backup_mod
+    backup_mod.BACKUP_DIR = tmp_path
+
+    db = SessionLocal()
+    payload = backup_mod._snapshot_payload(db)
+    db.close()
+    payload["version"] = 1
+    payload.pop("account_refs", None)
+    for name in set(backup_mod._TABLES) - backup_mod.LEGACY_TABLES:
+        payload.pop(name, None)
+    filename = "backup_20260101_010101.json"
+    (tmp_path / filename).write_text(json.dumps(payload), encoding="utf-8")
+
+    brief = client.post("/api/content", json={"title": "Keep On V1 Restore"}).json()
+    restored = client.post("/api/backup/restore", json={"filename": filename})
+    assert restored.status_code == 200
+    assert "content_briefs" not in restored.json()["counts"]
+    assert client.get(f"/api/content/{brief['id']}").status_code == 200
+    client.delete(f"/api/content/{brief['id']}")
 
 
 def test_import_commit_rejects_bad_upload_id():
@@ -658,6 +745,7 @@ def test_campaign_budget_show_visibility():
         "budget_show": {"total": False, "boosting_cost": False, "kol_price": False}}).json()
     assert upd["budget_show"] == {"total": False, "boosting_cost": False, "kol_price": False}
     viewer_kol = client.get(f"/api/assets/{asset['id']}", headers=VIEWER).json()["kols"][0]
+    assert client.get(f"/api/assets/{asset['id']}/export?format=json", headers=VIEWER).status_code == 403
     assert client.get(f"/api/influencers/{inf['id']}", headers=VIEWER).status_code == 403
     assert viewer_kol["name"] == "Visible Sec B Name"
     for key in ("rate", "gen_code_price", "boosting_cost", "kol_price",
@@ -679,15 +767,64 @@ def test_campaign_budgets_rollup_and_export():
     asset = client.post("/api/assets", json={
         "campaign_name": "Budget Rollup Camp", "drive_folder_url": "https://drive.google.com/drive/folders/b",
         "client_name": "RollupCo",
-        "kols": [{"influencer_id": 0, "rate": 1000, "gen_code_price": 200, "boosting_cost": 300, "client_approved": "Approve"},
+        "performance_results": [{"platform": "TikTok", "views": 12345, "metrics": {"ctr": 2.5}}],
+        "kols": [{"influencer_id": 0, "rate": 1000, "gen_code_price": 200, "boosting_cost": 300, "client_approved": "Approve", "objective": "=2+2"},
                  {"influencer_id": 0, "rate": "500", "boosting_cost": "", "client_approved": "Posted"}]}).json()
     cb = client.get("/api/stats/campaign-budgets").json()
     assert cb["total"] >= 2000  # 1500 + 500 from this campaign at least
     assert any(r["campaign"] == "Budget Rollup Camp" and r["budget"] == 2000 for r in cb["campaigns"])
+    summary = client.get("/api/assets/summaries?search=Budget%20Rollup%20Camp&limit=1").json()["items"][0]
+    assert summary["kol_count"] == 2 and summary["budget_total"] == 2000
+    assert summary["approved_count"] == 1 and summary["posted_count"] == 1
+    assert "kols" not in summary and "performance_results" not in summary
     # per-campaign export returns a real xlsx
     r = client.get(f"/api/assets/{asset['id']}/export?format=xlsx")
     assert r.status_code == 200 and r.content[:2] == b"PK"
+    from io import BytesIO
+    from openpyxl import load_workbook
+    workbook = load_workbook(BytesIO(r.content), read_only=True)
+    assert workbook.sheetnames == ["Campaign Summary", "KOL Plan", "Performance", "Input Files", "Activity Log"]
+    kol_rows = list(workbook["KOL Plan"].iter_rows(values_only=True))
+    objective_col = kol_rows[0].index("Objective")
+    assert kol_rows[1][objective_col] == "'=2+2"
+
+    exported_pdf = client.get(f"/api/assets/{asset['id']}/export?format=pdf")
+    assert exported_pdf.status_code == 200
+    assert exported_pdf.headers["content-type"].startswith("application/pdf")
+    assert exported_pdf.content.startswith(b"%PDF")
+
+    exported_png = client.get(f"/api/assets/{asset['id']}/export?format=png")
+    assert exported_png.status_code == 200
+    assert exported_png.headers["content-type"].startswith("image/png")
+    from PIL import Image
+    snapshot = Image.open(BytesIO(exported_png.content))
+    assert snapshot.format == "PNG"
+    assert snapshot.size == (1240, 1754)
+
+    exported_json = client.get(f"/api/assets/{asset['id']}/export?format=json")
+    assert exported_json.status_code == 200
+    handoff = exported_json.json()
+    assert handoff["export_version"] == 1
+    assert handoff["campaign"]["campaign_name"] == "Budget Rollup Camp"
+    assert handoff["campaign"]["performance_results"][0]["views"] == 12345
+    assert handoff["activity_log"]
     client.delete(f"/api/assets/{asset['id']}")
+
+
+def test_campaign_visual_export_paginates_and_limits_rows():
+    from app.campaign_report import MAX_VISUAL_ROWS, render_campaign_report
+    from io import BytesIO
+    from PIL import Image
+    import pytest
+
+    campaign = {"campaign_name": "Visual Export", "kols": [{}] * 23, "input_files": []}
+    rows = [{"KOL": f"Creator {i}", "Total": i * 100} for i in range(23)]
+    png = render_campaign_report(campaign, rows, "png")
+    image = Image.open(BytesIO(png.getvalue()))
+    assert image.size == (1240, (1754 * 2) + 20)
+
+    with pytest.raises(ValueError, match="use XLSX or CSV"):
+        render_campaign_report(campaign, rows * ((MAX_VISUAL_ROWS // len(rows)) + 1), "pdf")
 
 
 def test_campaign_audit_log():
@@ -796,9 +933,46 @@ def test_list_pagination_and_brand_filter():
     p2 = client.get(f"/api/assets?brand_id={brand['id']}&skip=2&limit=2").json()
     assert len(p1["items"]) == 2 and p1["total"] == 3 and len(p2["items"]) == 1
     assert {a["id"] for a in p1["items"]}.isdisjoint({a["id"] for a in p2["items"]})
+    compact = client.get(f"/api/assets/summaries?brand_id={brand['id']}&skip=0&limit=2").json()
+    assert compact["total"] == 3 and len(compact["items"]) == 2
+    assert all("kols" not in asset and "performance_results" not in asset for asset in compact["items"])
     for i in ids:
         client.delete(f"/api/assets/{i}")
     client.delete(f"/api/brands/{brand['id']}")
+
+
+def test_campaign_summary_payload_is_compact_and_preserves_permissions():
+    manager = client.post("/api/auth/users", json={
+        "username": "summary_manager", "password": "qa-pass-12", "role": "manager",
+    }).json()
+    manager_headers = {"Authorization": f"Bearer {create_token(username='summary_manager', role='manager')}"}
+    kols = [{
+        "name": f"Creator {index}", "rate": 1000, "gen_code_price": 100,
+        "boosting_cost": 50, "client_approved": "Pending",
+    } for index in range(80)]
+    asset = client.post("/api/assets", json={
+        "campaign_name": "Compact Payload QA",
+        "assigned_user_ids": [manager["id"]],
+        "kols": kols,
+        "performance_results": [{"caption": "x" * 500} for _ in range(80)],
+    }).json()
+
+    full = client.get("/api/assets?search=Compact%20Payload%20QA&limit=1").content
+    compact_response = client.get("/api/assets/summaries?search=Compact%20Payload%20QA&limit=1")
+    compact = compact_response.json()["items"][0]
+    assert len(compact_response.content) < len(full) * 0.1
+    assert compact["kol_count"] == 80 and compact["pending_count"] == 80
+
+    scoped = client.get(
+        "/api/assets/summaries?search=Compact%20Payload%20QA&limit=1",
+        headers=manager_headers,
+    ).json()["items"][0]
+    assert scoped["id"] == asset["id"] and scoped["can_edit"] is True
+    dashboard = client.get("/api/assets/dashboard", headers=manager_headers).json()
+    assert dashboard["pending"] == 80 and dashboard["budget_total"] == 0
+
+    client.delete(f"/api/assets/{asset['id']}")
+    client.delete(f"/api/auth/users/{manager['id']}")
 
 
 def test_internal_endpoints_are_admin_only():
@@ -844,6 +1018,9 @@ def test_readiness_and_request_id():
     assert "Strict-Transport-Security" not in health.headers
     # every response carries a correlation id
     assert client.get("/api/health").headers.get("X-Request-ID")
+    cached = client.get("/assets/app.js?v=41")
+    assert cached.status_code == 200
+    assert "immutable" in cached.headers.get("Cache-Control", "")
     # a caller-supplied id is propagated back
     rid = "test-rid-123"
     assert client.get("/api/health", headers={"X-Request-ID": rid}).headers.get("X-Request-ID") == rid

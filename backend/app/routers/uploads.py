@@ -188,16 +188,19 @@ async def upload_campaign_media(file: UploadFile = File(...), actor: models.User
 
 @files_router.get("/uploads/{category}/{filename}")
 def serve_upload(category: str, filename: str, db: Session = Depends(get_db)):
-    """Public media URL. Serves from the DB (durable copy), falling back to a
-    legacy file still on local disk. Filenames are content hashes → cache hard."""
+    """Public media URL. Prefer the local cache; rehydrate it from durable DB storage."""
     if category not in _CATEGORY_DIR or not _SAFE_NAME.match(filename):
         raise HTTPException(404, "File not found")
-    path = f"{category}/{filename}"
-    rec = db.execute(select(models.UploadedFile).where(models.UploadedFile.path == path)).scalar_one_or_none()
     cache = {"Cache-Control": "public, max-age=31536000, immutable"}
-    if rec is not None:
-        return Response(content=rec.content, media_type=rec.content_type or "application/octet-stream", headers=cache)
     disk = _CATEGORY_DIR[category] / filename
     if disk.is_file():
         return FileResponse(disk, headers=cache)
+    path = f"{category}/{filename}"
+    rec = db.execute(select(models.UploadedFile).where(models.UploadedFile.path == path)).scalar_one_or_none()
+    if rec is not None:
+        try:
+            disk.write_bytes(rec.content)
+            return FileResponse(disk, media_type=rec.content_type or "application/octet-stream", headers=cache)
+        except OSError:
+            return Response(content=rec.content, media_type=rec.content_type or "application/octet-stream", headers=cache)
     raise HTTPException(404, "File not found")

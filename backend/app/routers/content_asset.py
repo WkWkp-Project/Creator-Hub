@@ -7,6 +7,7 @@ Access model:
   - viewer  : sees (read-only) only campaigns assigned to them.
 """
 import io
+import json
 import re
 from datetime import datetime
 
@@ -20,12 +21,14 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..config import get_settings
+from ..campaign_report import render_campaign_report
 from ..content_asset_models import (
     DEFAULT_INPUT_FILES,
     ContentAsset,
     ContentAssetCreate,
     ContentAssetList,
     ContentAssetOut,
+    ContentAssetSummaryList,
     ContentAssetUpdate,
 )
 from ..database import get_db
@@ -160,6 +163,91 @@ def _hydrate_kol_names(asset: ContentAsset, db: Session) -> None:
     asset.kols = hydrated
 
 
+def _filter_asset_query(stmt, search=None, owner_email=None, status=None, brand_id=None):
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(or_(ContentAsset.campaign_name.ilike(like), ContentAsset.client_name.ilike(like)))
+    if owner_email:
+        stmt = stmt.where(ContentAsset.owner_email == owner_email)
+    if brand_id is not None:
+        stmt = stmt.where(ContentAsset.brand_id == brand_id)
+    if status and status.lower() not in {"all", ""}:
+        stmt = stmt.where(ContentAsset.status == status.lower())
+    return stmt
+
+
+def _summary_row(row, user: models.User) -> dict:
+    kols = row.kols or []
+    approved = posted = pending = overdue = soon = 0
+    today = datetime.now().date()
+    closed = str(row.status or "").lower() in {"completed", "complete", "done", "success", "succeeded", "cancelled"}
+    budget_show = row.budget_show or {}
+    hidden_budget = set()
+    if user.role == "viewer":
+        hidden_budget = (set(_BUDGET_KEYS) if budget_show.get("total") is False
+                         else {key for key in _BUDGET_KEYS if budget_show.get(key) is False})
+    budget = 0.0
+    for kol in kols:
+        if not isinstance(kol, dict):
+            continue
+        state = kol.get("client_approved")
+        approved += state == "Approve"
+        posted += state == "Posted"
+        pending += state == "Pending"
+        for key in ("rate", "gen_code_price", "boosting_cost"):
+            if key not in hidden_budget:
+                budget += _num(kol.get(key))
+        if closed or state == "Approve":
+            continue
+        value = kol.get("post_date") or kol.get("period_to")
+        if not value or not re.match(r"^\d{4}-\d{2}-\d{2}", str(value)):
+            continue
+        try:
+            days = (datetime.fromisoformat(str(value)[:10]).date() - today).days
+        except ValueError:
+            continue
+        if days < 0:
+            overdue += 1
+        elif days <= 7:
+            soon += 1
+
+    files = row.input_files or []
+    file_count = len(DEFAULT_INPUT_FILES)
+    linked = sum(1 for item in files[:file_count] if isinstance(item, dict) and item.get("linked"))
+    return {
+        "id": row.id,
+        "client_name": row.client_name or "",
+        "campaign_name": row.campaign_name,
+        "brand_id": row.brand_id,
+        "responsible_member_ids": row.responsible_member_ids or (
+            [row.responsible_member_id] if row.responsible_member_id else []
+        ),
+        "period_start": row.period_start or "",
+        "period_end": row.period_end or "",
+        "status": row.status or "draft",
+        "can_edit": user.role in {"admin", "manager"},
+        "kol_count": len(kols),
+        "approved_count": approved,
+        "posted_count": posted,
+        "pending_count": pending,
+        "overdue_count": overdue,
+        "soon_count": soon,
+        "linked_file_count": linked,
+        "input_file_count": file_count,
+        "budget_total": round(budget, 2),
+    }
+
+
+def _summary_columns():
+    return (
+        ContentAsset.id, ContentAsset.client_name, ContentAsset.campaign_name,
+        ContentAsset.brand_id, ContentAsset.responsible_member_id,
+        ContentAsset.responsible_member_ids, ContentAsset.period_start,
+        ContentAsset.period_end, ContentAsset.status, ContentAsset.input_files,
+        ContentAsset.kols, ContentAsset.assigned_user_ids, ContentAsset.budget_show,
+    )
+
+
 @router.get("", response_model=ContentAssetList)
 def list_assets(
     search: str | None = None,
@@ -171,26 +259,81 @@ def list_assets(
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    stmt = select(ContentAsset)
-    if search:
-        like = f"%{search}%"
-        stmt = stmt.where(or_(ContentAsset.campaign_name.ilike(like), ContentAsset.client_name.ilike(like)))
-    if owner_email:
-        stmt = stmt.where(ContentAsset.owner_email == owner_email)
-    if brand_id is not None:
-        stmt = stmt.where(ContentAsset.brand_id == brand_id)
-    if status and status.lower() not in {"all", ""}:
-        stmt = stmt.where(ContentAsset.status == status.lower())
+    stmt = _filter_asset_query(select(ContentAsset), search, owner_email, status, brand_id)
     stmt = stmt.order_by(ContentAsset.updated_at.desc())
-    rows = db.execute(stmt).scalars().all()
-    # Non-admins only see the campaigns assigned to them (visibility is scoped).
-    if user.role != "admin":
+    if user.role == "admin":
+        count_stmt = _filter_asset_query(
+            select(func.count(ContentAsset.id)), search, owner_email, status, brand_id
+        )
+        total = db.scalar(count_stmt) or 0
+        items = db.execute(stmt.offset(skip).limit(limit)).scalars().all()
+    else:
+        # JSON membership differs across SQLite/Postgres, so retain portable
+        # filtering for scoped users while selecting only their final page.
+        rows = db.execute(stmt).scalars().all()
         rows = [a for a in rows if user.id in (a.assigned_user_ids or [])]
-    total = len(rows)
-    items = rows[skip: skip + limit]
+        total = len(rows)
+        items = rows[skip: skip + limit]
     for it in items:
         _redact_budget(it, user)
     return {"total": total, "items": items}
+
+
+@router.get("/dashboard")
+def campaign_dashboard(
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Aggregate dashboard data server-side and return only the top attention rows."""
+    rows = db.execute(select(*_summary_columns())).all()
+    if user.role != "admin":
+        rows = [row for row in rows if user.id in (row.assigned_user_ids or [])]
+    summaries = [_summary_row(row, user) for row in rows]
+    attention = [
+        {
+            "id": item["id"], "campaign_name": item["campaign_name"],
+            "client_name": item["client_name"], "overdue": item["overdue_count"],
+            "soon": item["soon_count"],
+        }
+        for item in summaries
+        if item["status"] not in {"completed", "complete", "done", "success", "succeeded", "cancelled"}
+        and (item["overdue_count"] or item["soon_count"])
+    ]
+    attention.sort(key=lambda item: (item["overdue"], item["soon"]), reverse=True)
+    return {
+        "active": sum(item["status"] == "active" for item in summaries),
+        "pending": sum(item["pending_count"] for item in summaries),
+        "overdue": sum(item["overdue_count"] for item in summaries),
+        "budget_total": round(sum(item["budget_total"] for item in summaries), 2) if user.role == "admin" else 0,
+        "attention": attention[:8],
+    }
+
+
+@router.get("/summaries", response_model=ContentAssetSummaryList)
+def list_asset_summaries(
+    search: str | None = None,
+    owner_email: str | None = None,
+    status: str | None = None,
+    brand_id: int | None = None,
+    skip: int = 0,
+    limit: int = Query(200, le=500),
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Small list payload for cards, dashboards, search, and export pickers."""
+    stmt = _filter_asset_query(select(*_summary_columns()), search, owner_email, status, brand_id)
+    stmt = stmt.order_by(ContentAsset.updated_at.desc())
+    if user.role == "admin":
+        count_stmt = _filter_asset_query(
+            select(func.count(ContentAsset.id)), search, owner_email, status, brand_id
+        )
+        total = db.scalar(count_stmt) or 0
+        rows = db.execute(stmt.offset(skip).limit(limit)).all()
+    else:
+        visible = [row for row in db.execute(stmt).all() if user.id in (row.assigned_user_ids or [])]
+        total = len(visible)
+        rows = visible[skip: skip + limit]
+    return {"total": total, "items": [_summary_row(row, user) for row in rows]}
 
 
 @router.get("/{asset_id}", response_model=ContentAssetOut)
@@ -509,11 +652,11 @@ def delete_asset(asset_id: int, user: models.User = Depends(require_admin), db: 
 @router.get("/{asset_id}/export")
 def export_asset(
     asset_id: int,
-    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    format: str = Query("xlsx", pattern="^(xlsx|csv|json|pdf|png)$"),
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Download one campaign's KOL plan + budget as Excel/CSV (admin or assigned manager)."""
+    """Download one campaign workspace (admin or assigned manager only)."""
     from .. import models as _m
     obj = db.get(ContentAsset, asset_id)
     if not obj or not _can_read(user, obj):
@@ -521,7 +664,15 @@ def export_asset(
     if not _can_edit(user, obj):
         raise HTTPException(403, "คุณมีสิทธิ์ดูแคมเปญนี้เท่านั้น (export ไม่ได้)")
 
+    _hydrate_kol_names(obj, db)
     names = {i.id: i.name for i in db.execute(select(_m.Influencer)).scalars().all()}
+    def spreadsheet_value(value):
+        # Prevent imported user text from becoming a formula when opened in a
+        # spreadsheet program. JSON exports preserve the original value.
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+
     rows = []
     for k in (obj.kols or []):
         rate, gen, boost = _num(k.get("rate")), _num(k.get("gen_code_price")), _num(k.get("boosting_cost"))
@@ -541,18 +692,82 @@ def export_asset(
             "Total": round(rate + gen + boost, 2),
             "Objective": k.get("objective", ""),
         })
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows).map(spreadsheet_value)
     stamp = datetime.now().strftime("%Y%m%d")
-    safe = "".join(c for c in (obj.campaign_name or "campaign") if c.isalnum() or c in " -_")[:40].strip() or "campaign"
+    safe = "".join(
+        c for c in (obj.campaign_name or "")
+        if c.isascii() and (c.isalnum() or c in " -_")
+    )[:40].strip() or f"campaign-{obj.id}"
     fname = f"{safe}_{stamp}"
+
+    history_rows = db.query(models.ChangeLog).filter(
+        models.ChangeLog.entity == "campaign", models.ChangeLog.asset_id == asset_id
+    ).order_by(models.ChangeLog.created_at.desc()).all()
+    history = [{
+        "actor": r.actor,
+        "actor_id": r.actor_id,
+        "action": r.action,
+        "summary": r.summary,
+        "detail": r.detail,
+        "at": r.created_at.isoformat() + "Z",
+    } for r in history_rows]
+
+    campaign_data = ContentAssetOut.model_validate(obj).model_dump(mode="json")
+    if format in {"pdf", "png"}:
+        try:
+            report = render_campaign_report(campaign_data, rows, format)
+        except ValueError as exc:
+            raise HTTPException(413, str(exc)) from exc
+        return StreamingResponse(
+            report,
+            media_type="application/pdf" if format == "pdf" else "image/png",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.{format}"'},
+        )
+
+    if format == "json":
+        data = json.dumps({
+            "export_version": 1,
+            "exported_at": datetime.now().isoformat(),
+            "campaign": campaign_data,
+            "activity_log": history,
+        }, ensure_ascii=False, indent=2).encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(data), media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.json"'},
+        )
 
     if format == "csv":
         data = df.to_csv(index=False).encode("utf-8-sig")
         return StreamingResponse(io.BytesIO(data), media_type="text/csv",
                                  headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'})
+
+    def excel_rows(items: list[dict]) -> list[dict]:
+        return [{
+            key: spreadsheet_value(
+                json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value
+            )
+            for key, value in row.items()
+        } for row in items if isinstance(row, dict)]
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        summary_fields = (
+            "id", "campaign_name", "client_name", "brand_id", "owner_name", "owner_email",
+            "period_start", "period_end", "status", "tags", "description", "stakeholders",
+            "drive_folder_url", "responsible_member_id", "responsible_member_ids",
+            "assigned_user_ids", "budget_show", "created_at", "updated_at",
+        )
+        summary = []
+        for key in summary_fields:
+            value = campaign_data.get(key, "")
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False)
+            summary.append({"Field": key, "Value": spreadsheet_value(value)})
+        pd.DataFrame(summary).to_excel(writer, index=False, sheet_name="Campaign Summary")
         df.to_excel(writer, index=False, sheet_name="KOL Plan")
+        pd.DataFrame(excel_rows(obj.performance_results or [])).to_excel(writer, index=False, sheet_name="Performance")
+        pd.DataFrame(excel_rows(obj.input_files or [])).to_excel(writer, index=False, sheet_name="Input Files")
+        pd.DataFrame(excel_rows(history)).to_excel(writer, index=False, sheet_name="Activity Log")
     buf.seek(0)
     return StreamingResponse(
         buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

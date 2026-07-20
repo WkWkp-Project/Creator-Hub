@@ -169,3 +169,29 @@ class ContentAssetOut(ContentAssetBase):
 class ContentAssetList(BaseModel):
     total: int
     items: list[ContentAssetOut]
+
+
+class ContentAssetSummary(BaseModel):
+    id: int
+    client_name: str = ""
+    campaign_name: str
+    brand_id: int | None = None
+    responsible_member_ids: list[int] = Field(default_factory=list)
+    period_start: str = ""
+    period_end: str = ""
+    status: str = "draft"
+    can_edit: bool = False
+    kol_count: int = 0
+    approved_count: int = 0
+    posted_count: int = 0
+    pending_count: int = 0
+    overdue_count: int = 0
+    soon_count: int = 0
+    linked_file_count: int = 0
+    input_file_count: int = 0
+    budget_total: float = 0
+
+
+class ContentAssetSummaryList(BaseModel):
+    total: int
+    items: list[ContentAssetSummary]
