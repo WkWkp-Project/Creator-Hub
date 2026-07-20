@@ -165,6 +165,74 @@
     },
   });
 
+  let pendingFullPageSnapshot = null;
+
+  async function captureCampaignPage(assetId, campaignName) {
+    if (typeof window.html2canvas !== "function") {
+      return toast("PNG capture library is unavailable. Please reload the page.", "err");
+    }
+    const root = document.body;
+    const previousScroll = { x: window.scrollX, y: window.scrollY };
+    toast("Preparing full-page PNG...", "info");
+    try {
+      window.scrollTo(0, 0);
+      await document.fonts?.ready;
+      await Promise.all([...root.querySelectorAll("img")].map((image) => {
+        if (image.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          image.addEventListener("load", resolve, { once: true });
+          image.addEventListener("error", resolve, { once: true });
+          setTimeout(resolve, 3000);
+        });
+      }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const width = Math.max(root.scrollWidth, document.documentElement.scrollWidth, window.innerWidth);
+      const height = Math.max(root.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
+      const pixelLimit = 40000000;
+      const dimensionLimit = 24000;
+      const scale = Math.max(0.35, Math.min(
+        2,
+        dimensionLimit / width,
+        dimensionLimit / height,
+        Math.sqrt(pixelLimit / (width * height)),
+      ));
+      const canvas = await window.html2canvas(root, {
+        backgroundColor: "#fafafa",
+        height,
+        width,
+        windowHeight: height,
+        windowWidth: width,
+        scrollX: 0,
+        scrollY: 0,
+        scale,
+        useCORS: true,
+        allowTaint: false,
+        onclone: (clonedDocument) => clonedDocument.getElementById("toast")?.remove(),
+        logging: false,
+      });
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      canvas.width = 1;
+      canvas.height = 1;
+      if (!blob) throw new Error("The browser could not encode the PNG.");
+      const safeName = String(campaignName || `campaign-${assetId}`)
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim().slice(0, 80) || `campaign-${assetId}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${safeName}-full-page.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast("Full-page PNG saved.");
+    } catch (error) {
+      toast(`PNG capture failed: ${error.message}`, "err");
+    } finally {
+      window.scrollTo(previousScroll.x, previousScroll.y);
+    }
+  }
+
   async function openCampaignExportModal(assetId = null) {
     let campaigns = [];
     try {
@@ -181,7 +249,7 @@
     ).join("");
     const formats = [
       { value: "pdf", icon: "picture_as_pdf", title: "PDF Report", detail: "Multi-page visual campaign report ready to share" },
-      { value: "png", icon: "image", title: "PNG Snapshot", detail: "High-resolution visual summary in one image" },
+      { value: "png", icon: "image", title: "PNG Full-page Snapshot", detail: "Capture the complete campaign page, including off-screen sections" },
       { value: "xlsx", icon: "table_view", title: "Excel Workbook", detail: "Summary, KOL plan, performance and input files" },
       { value: "csv", icon: "csv", title: "CSV Asset List", detail: "KOL plan in a spreadsheet-ready CSV file" },
       { value: "json", icon: "data_object", title: "JSON Data", detail: "Campaign data and activity log for handoff or archive" },
@@ -215,6 +283,19 @@
     m.querySelector("[data-download]").addEventListener("click", () => {
       const id = Number(m.querySelector("[data-export-campaign]").value);
       if (!id) return toast("Please select a campaign.", "err");
+      if (selectedFormat === "png") {
+        const campaign = campaigns.find((item) => item.id === id);
+        const current = location.hash.match(/^#\/asset\/(\d+)/);
+        m.remove();
+        if (current && Number(current[1]) === id) {
+          setTimeout(() => captureCampaignPage(id, campaign?.campaign_name), 50);
+        } else {
+          pendingFullPageSnapshot = { id, name: campaign?.campaign_name || `campaign-${id}` };
+          location.hash = `#/asset/${id}`;
+          toast("Opening the campaign before capturing the full page...", "info");
+        }
+        return;
+      }
       const tokenQ = CH.token ? "&token=" + encodeURIComponent(CH.token) : "";
       window.open(`${window.API_BASE || ""}/api/assets/${id}/export?format=${selectedFormat}${tokenQ}`, "_blank", "noopener");
       toast(`Exporting campaign as ${selectedFormat.toUpperCase()}...`);
@@ -457,6 +538,11 @@
       host.append(head, body);
       try { await sec.render(body, a, ctx); }
       catch (e) { body.appendChild(el(`<div class="text-error p-md">Section ${esc(sec.title)} error: ${esc(e.message)}</div>`)); }
+    }
+    if (pendingFullPageSnapshot && pendingFullPageSnapshot.id === a.id) {
+      const snapshot = pendingFullPageSnapshot;
+      pendingFullPageSnapshot = null;
+      setTimeout(() => captureCampaignPage(snapshot.id, snapshot.name), 100);
     }
   });
 
