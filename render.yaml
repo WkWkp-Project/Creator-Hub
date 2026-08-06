@@ -1,16 +1,12 @@
-# Render blueprint — persistent, production-hardened deploy.
-# In Render: New → Blueprint → connect this repo. It provisions a managed
-# PostgreSQL database and the web service (API + UI on one HTTPS origin).
+# Render blueprint — web service only. The database is an EXTERNAL managed
+# Postgres (e.g. Neon — free tier that does not expire, unlike Render's free
+# Postgres which is deleted after 30 days). Set DATABASE_URL to the external
+# connection string in the Render dashboard (Environment tab) — it is kept out
+# of git on purpose (sync: false).
 #
-# Data persists across redeploys (Postgres, not the old ephemeral SQLite).
 # SECRET_KEY is generated; ENVIRONMENT=production turns on the fail-fast guards
 # (a strong secret, a non-'*' CORS origin, and a non-SQLite DB are all required).
 # If you rename the service, update CORS_ORIGINS to its public URL.
-databases:
-  - name: creator-hub-db
-    plan: free
-    databaseName: creatorhub
-    user: creatorhub
 
 services:
   - type: web
@@ -20,10 +16,10 @@ services:
     plan: free
     healthCheckPath: /api/ready
     envVars:
+      # Neon (or any external Postgres) connection string — set in the dashboard.
+      # Accepts postgres:// or postgresql:// (the app normalises the scheme).
       - key: DATABASE_URL
-        fromDatabase:
-          name: creator-hub-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT

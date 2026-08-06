@@ -46,6 +46,15 @@ elif settings.using_default_secret:
 # or applies new revisions to an already-managed DB).
 run_migrations(engine)
 
+# A freshly-provisioned database has no login accounts (a new Postgres, e.g. after
+# moving off an expired free DB). Create the defaults so the app is usable at once
+# — idempotent, skipped once any user exists. Never seeds demo influencers.
+try:
+    from .seed import ensure_login_accounts
+    ensure_login_accounts()
+except Exception:  # a seed hiccup must never block startup
+    log.exception("login-account seed on boot failed")
+
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 # Request-id + structured access logging (added after CORS so it wraps it).

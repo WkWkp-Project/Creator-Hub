@@ -162,6 +162,18 @@ def _seed_users(db) -> int:
     return len(DEMO_USERS)
 
 
+def ensure_login_accounts() -> int:
+    """Create the default login accounts on an empty database (idempotent — a
+    no-op once any user exists), so a freshly-provisioned DB is usable straight
+    away. Does NOT seed demo influencers/campaigns — those are imported by the
+    user. Called on app boot."""
+    db = SessionLocal()
+    try:
+        return _seed_users(db)
+    finally:
+        db.close()
+
+
 def _seed_influencers(db) -> int:
     if db.query(Influencer).count() > 0:
         return 0

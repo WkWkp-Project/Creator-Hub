@@ -13,13 +13,15 @@ from app.security import create_token, hash_password  # noqa: E402
 from app.services.column_matcher import coerce, match_column  # noqa: E402
 from app.services.tiers import tier_for_followers  # noqa: E402
 
-# Seed an admin + a viewer directly so we can exercise the auth-gated API.
+# admin + viewer are auto-seeded on boot (app.main → ensure_login_accounts);
+# seed defensively only if that ever stops happening, so the test stays self-contained.
 _db = SessionLocal()
-_db.add_all([
-    User(username="admin", full_name="Admin", role="admin", password_hash=hash_password("admin123")),
-    User(username="viewer", full_name="Viewer", role="viewer", password_hash=hash_password("viewer123")),
-])
-_db.commit()
+if _db.query(User).count() == 0:
+    _db.add_all([
+        User(username="admin", full_name="Admin", role="admin", password_hash=hash_password("admin123")),
+        User(username="viewer", full_name="Viewer", role="viewer", password_hash=hash_password("viewer123")),
+    ])
+    _db.commit()
 _db.close()
 
 client = TestClient(app)
