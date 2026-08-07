@@ -4,10 +4,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..content_asset_models import ContentAsset
+from ..directory_models import Brand, Member
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+
+def _num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @router.get("")
@@ -32,7 +41,7 @@ def overview(_: models.User = Depends(get_current_user), db: Session = Depends(g
         .group_by(models.Influencer.tier)
     ).all()
 
-    tier_order = {"Nano": 0, "Micro": 1, "Mega": 2}
+    tier_order = {"Nano": 0, "Micro": 1, "Mid-Tier": 2, "Macro": 3, "Mega": 4}
     tier_rows = sorted(
         [{"name": t or "Unranked", "count": c} for t, c in tiers],
         key=lambda r: tier_order.get(r["name"], 99),
@@ -50,7 +59,7 @@ def overview(_: models.User = Depends(get_current_user), db: Session = Depends(g
 
 
 @router.get("/niche-performance")
-def niche_performance(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def niche_performance(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Per-niche group comparison across multiple performance dimensions."""
     influencers = db.execute(select(models.Influencer)).scalars().all()
     groups: dict[str, list[models.Influencer]] = {}
@@ -75,22 +84,24 @@ def niche_performance(_: models.User = Depends(get_current_user), db: Session = 
         # Cost efficiency: reach delivered per 1,000 THB of total fee.
         total_fee = sum(m.total_fee for m in members) or 0
         reach_per_1k = (total_reach / total_fee * 1000) if total_fee else 0
-        rows.append({
+        row = {
             "niche": niche,
             "count": n,
             "total_reach": int(total_reach),
             "avg_engagement_rate": round(avg_er, 2),
             "avg_growth_30d": round(avg_growth, 2),
-            "avg_total_fee": round(avg_fee, 2),
             "avg_fit_score": round(avg_quality, 1),
-            "reach_per_1k_thb": round(reach_per_1k, 1),
-        })
+        }
+        if user.role == "admin":
+            row["avg_total_fee"] = round(avg_fee, 2)
+            row["reach_per_1k_thb"] = round(reach_per_1k, 1)
+        rows.append(row)
     rows.sort(key=lambda r: r["total_reach"], reverse=True)
     return {"niches": rows}
 
 
 @router.get("/financials")
-def financials(_: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+def financials(_: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     """Roster-wide financial roll-up derived from influencer fees + campaign budgets."""
     influencers = db.execute(select(models.Influencer)).scalars().all()
     base = sum(i.base_rate or 0 for i in influencers)
@@ -106,7 +117,7 @@ def financials(_: models.User = Depends(get_current_user), db: Session = Depends
         slot = by_tier.setdefault(t, {"tier": t, "count": 0, "total_fee": 0.0})
         slot["count"] += 1
         slot["total_fee"] += i.total_fee
-    tier_order = {"Nano": 0, "Micro": 1, "Mega": 2, "Unranked": 9}
+    tier_order = {"Nano": 0, "Micro": 1, "Mid-Tier": 2, "Macro": 3, "Mega": 4, "Unranked": 9}
     tier_rows = sorted(by_tier.values(), key=lambda r: tier_order.get(r["tier"], 9))
     for r in tier_rows:
         r["total_fee"] = round(r["total_fee"], 2)
@@ -135,3 +146,59 @@ def financials(_: models.User = Depends(get_current_user), db: Session = Depends
         "campaign_budget_total": round(campaign_budget, 2),
         "campaign_budget_active": round(active_budget, 2),
     }
+
+
+@router.get("/campaign-budgets")
+def campaign_budgets(_: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Real money flowing through the live campaign workspace (ContentAsset.kols),
+    rolled up by brand, lead, and status — the figures finance actually wants."""
+    assets = db.execute(select(ContentAsset)).scalars().all()
+    brand_names = {b.id: b.name for b in db.execute(select(Brand)).scalars().all()}
+    member_names = {m.id: m.name for m in db.execute(select(Member)).scalars().all()}
+
+    def kol_budget(a) -> float:
+        return sum(_num(k.get("rate")) + _num(k.get("gen_code_price")) + _num(k.get("boosting_cost"))
+                   for k in (a.kols or []))
+
+    total = 0.0
+    by_brand: dict[str, float] = {}
+    by_lead: dict[str, float] = {}
+    by_status: dict[str, float] = {}
+    rows = []
+    for a in assets:
+        b = kol_budget(a)
+        total += b
+        bn = brand_names.get(a.brand_id) or "No brand"
+        by_brand[bn] = by_brand.get(bn, 0.0) + b
+        by_status[a.status] = by_status.get(a.status, 0.0) + b
+        leads = a.responsible_member_ids or ([a.responsible_member_id] if a.responsible_member_id else [])
+        for mid in leads:
+            ln = member_names.get(mid)
+            if ln:
+                by_lead[ln] = by_lead.get(ln, 0.0) + b
+        rows.append({
+            "id": a.id, "campaign": a.campaign_name, "brand": bn,
+            "client": a.client_name, "status": a.status,
+            "budget": round(b, 2), "kols": len(a.kols or []),
+        })
+
+    def _rank(d, key):
+        return sorted(([{key: k, "total": round(v, 2)} for k, v in d.items()]), key=lambda r: -r["total"])
+
+    return {
+        "total": round(total, 2),
+        "campaign_count": len(assets),
+        "by_brand": _rank(by_brand, "brand"),
+        "by_lead": _rank(by_lead, "lead"),
+        "by_status": _rank(by_status, "status"),
+        "campaigns": sorted(rows, key=lambda r: -r["budget"]),
+    }
+
+
+@router.get("/activity")
+def activity(limit: int = 20, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Recent campaign-change activity across the workspace (for the dashboard)."""
+    rows = db.query(models.ChangeLog).order_by(models.ChangeLog.created_at.desc()).limit(limit).all()
+    return [{"entity": r.entity, "entity_id": r.asset_id, "asset_id": r.asset_id,
+             "actor": r.actor, "actor_id": r.actor_id, "action": r.action,
+             "summary": r.summary, "detail": r.detail, "at": r.created_at.isoformat() + "Z"} for r in rows]

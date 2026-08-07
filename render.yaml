@@ -1,17 +1,30 @@
-# Render blueprint — one-click demo deploy (free tier).
-# In Render: New → Blueprint → connect this repo. It builds the root Dockerfile,
-# runs the seeder, and serves the full app (API + UI) at a public HTTPS URL.
+# Render blueprint — web service only. The database is an EXTERNAL managed
+# Postgres (e.g. Neon — free tier that does not expire, unlike Render's free
+# Postgres which is deleted after 30 days). Set DATABASE_URL to the external
+# connection string in the Render dashboard (Environment tab) — it is kept out
+# of git on purpose (sync: false).
 #
-# Demo uses the bundled SQLite DB (auto-seeded on each boot). For a persistent
-# deployment, add a Render PostgreSQL service and set DATABASE_URL + ENVIRONMENT
-# + SECRET_KEY (see docs/DEPLOYMENT.md).
+# SECRET_KEY is generated; ENVIRONMENT=production turns on the fail-fast guards
+# (a strong secret, a non-'*' CORS origin, and a non-SQLite DB are all required).
+# If you rename the service, update CORS_ORIGINS to its public URL.
+
 services:
   - type: web
-    name: creator-hub-demo
+    name: creator-hub
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    healthCheckPath: /api/health
+    healthCheckPath: /api/ready
     envVars:
+      # Neon (or any external Postgres) connection string — set in the dashboard.
+      # Accepts postgres:// or postgresql:// (the app normalises the scheme).
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGINS
+        value: https://creator-hub.onrender.com
       - key: WEB_CONCURRENCY
-        value: "1"
+        value: "2"

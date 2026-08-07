@@ -3,15 +3,14 @@
 Run with:  python -m app.seed
 """
 from .content_asset_models import ContentAsset
-from .database import Base, SessionLocal, engine
+from .database import SessionLocal, engine
 from .directory_models import Brand, Member
-from .migrate import run_light_migrations
+from .migrate import run_migrations
 from .models import Campaign, Influencer, User
 from .security import hash_password
 from .services.tiers import tier_for_followers
 
-Base.metadata.create_all(bind=engine)
-run_light_migrations(engine)  # add columns to pre-existing tables before seeding
+run_migrations(engine)  # bring schema to head (Alembic) before seeding
 
 DEMO = [
     dict(
@@ -161,6 +160,18 @@ def _seed_users(db) -> int:
     ])
     db.commit()
     return len(DEMO_USERS)
+
+
+def ensure_login_accounts() -> int:
+    """Create the default login accounts on an empty database (idempotent — a
+    no-op once any user exists), so a freshly-provisioned DB is usable straight
+    away. Does NOT seed demo influencers/campaigns — those are imported by the
+    user. Called on app boot."""
+    db = SessionLocal()
+    try:
+        return _seed_users(db)
+    finally:
+        db.close()
 
 
 def _seed_influencers(db) -> int:

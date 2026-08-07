@@ -1,3 +1,6 @@
+> 👉 **เพิ่งมาทำต่อ? อ่าน [`HANDOFF.md`](HANDOFF.md) ก่อน** — สรุปสั้น ตรงปัจจุบัน (วิธีรัน, roles, สถาปัตยกรรม, แผนที่ไฟล์).
+> README ด้านล่างเป็นภาพรวมเดิม บางส่วนยังไม่อัปเดตตามฟีเจอร์ล่าสุด (3 roles, Content-Asset campaign suite, การรวมหน้า User/Member).
+
 # Creator Hub — Influencer Database & Management Dashboard
 
 A bright, enterprise-grade dashboard for managing an influencer/creator roster:

@@ -7,7 +7,7 @@ scope of work and past campaign history.
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, Float, Integer, LargeBinary, String, Text, JSON, text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -38,7 +38,7 @@ class Influencer(Base):
     # Social profile links keyed by platform, rendered as clickable icons:
     # {"instagram": "https://instagram.com/...", "tiktok": "...", "youtube": "...",
     #  "facebook": "...", "twitter": "...", "line": "...", "website": "..."}
-    social_links: Mapped[dict] = mapped_column(JSON, default=dict)
+    social_links: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
 
     # --- Audience metrics ---
     followers: Mapped[int] = mapped_column(Integer, default=0)        # total reach
@@ -46,7 +46,7 @@ class Influencer(Base):
     growth_30d: Mapped[float] = mapped_column(Float, default=0.0)       # % 30d
 
     # Per-platform breakdown: [{"platform": "YouTube", "metric": "Subscribers", "value": "850K"}]
-    platforms: Mapped[list] = mapped_column(JSON, default=list)
+    platforms: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     # --- Fee breakdown (the four costs the brief asks for) ---
     base_rate: Mapped[float] = mapped_column(Float, default=0.0)        # ค่าตัว
@@ -63,10 +63,10 @@ class Influencer(Base):
     fit_note: Mapped[str] = mapped_column(Text, default="")
 
     # Scope of work: [{"title": "1x YouTube Video", "detail": "8-12 min integrated"}]
-    scope_of_work: Mapped[list] = mapped_column(JSON, default=list)
+    scope_of_work: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     # Past campaigns: [{"brand": "Beauty Co", "campaign": "Launch promo", "views": "200k", "ctr": "15%"}]
-    past_campaigns: Mapped[list] = mapped_column(JSON, default=list)
+    past_campaigns: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
 
     notes: Mapped[str] = mapped_column(Text, default="")
 
@@ -101,10 +101,33 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    # Email links a login account to its directory Member (kept in sync by email).
+    email: Mapped[str] = mapped_column(String(160), default="", index=True)
     full_name: Mapped[str] = mapped_column(String(160), default="")
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(20), default="viewer", index=True)
+    # Incremented to revoke all of this user's outstanding tokens (logout /
+    # password change / admin force-logout). A token is valid only if its `tv`
+    # claim matches this.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Directory fields (folded in from the old Members page): the org/company this
+    # person belongs to, their job position, and a free-text note.
+    organization: Mapped[str] = mapped_column(String(160), default="")
+    position: Mapped[str] = mapped_column(String(120), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    # Per-user grant to view the influencer Directory. Admins always can; a
+    # non-admin (manager/viewer) sees the Directory only when this is true.
+    directory_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """Tiny key→JSON store for global app settings (e.g. the Directory field
+    allowlist applied to all non-admin viewers)."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Campaign(Base):
@@ -122,10 +145,45 @@ class Campaign(Base):
     budget: Mapped[float] = mapped_column(Float, default=0.0)
     currency: Mapped[str] = mapped_column(String(8), default="THB")
     # IDs of assigned influencers (kept simple as a JSON list).
-    influencer_ids: Mapped[list] = mapped_column(JSON, default=list)
+    influencer_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     notes: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class ChangeLog(Base):
+    """Server-side audit trail of campaign (ContentAsset) changes — who did what,
+    when. Read-only history (auto-created table; no migration needed)."""
+    __tablename__ = "change_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # What was touched: entity ("campaign" / "user" / "member" / "brand" / "auth"
+    # / "import" / "backup") and its id (asset_id is the generic entity id).
+    entity: Mapped[str] = mapped_column(String(20), default="campaign", server_default=text("'campaign'"), index=True)
+    asset_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Who did it — display name plus the immutable user id (non-repudiation;
+    # renaming the user can't rewrite who acted).
+    actor: Mapped[str] = mapped_column(String(160), default="")
+    actor_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(20), default="updated")  # created/updated/deleted/login/logout/...
+    summary: Mapped[str] = mapped_column(String(400), default="")
+    # Optional before/after for sensitive changes, e.g. {"role": {"from","to"}}.
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class UploadedFile(Base):
+    """User-uploaded media (avatars + campaign media) stored IN the database so it
+    survives on hosts with an ephemeral filesystem (e.g. Render), where files on
+    local disk are wiped on every restart/redeploy. `path` mirrors the public URL
+    tail ("campaigns/<hash>.png") so the served URL is unchanged."""
+    __tablename__ = "uploaded_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    path: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str] = mapped_column(String(100), default="application/octet-stream")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

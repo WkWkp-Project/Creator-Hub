@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import DateTime, Integer, String, JSON, Text
+from sqlalchemy import DateTime, Integer, String, JSON, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -27,7 +27,6 @@ DEFAULT_INPUT_FILES: list[dict] = [
     {"n": "01", "key": "product_info", "title": "Product Information", "synced": "Product_Info", "source": "google_drive", "drive_url": "", "thumb": "", "linked": False},
     {"n": "02", "key": "content_direction", "title": "Content Direction", "synced": "Content_Dir", "source": "google_drive", "drive_url": "", "thumb": "", "linked": False},
     {"n": "03", "key": "ci_design", "title": "CI Design Guidelines", "synced": "CI_Design", "source": "uploaded", "drive_url": "", "thumb": "", "linked": False},
-    {"n": "04", "key": "content_category", "title": "Content Category Map", "synced": "Cat_Map", "source": "notion", "drive_url": "", "thumb": "", "linked": False},
 ]
 
 
@@ -43,7 +42,11 @@ class ContentAsset(Base):
     campaign_name: Mapped[str] = mapped_column(String(200), index=True)
     # Grouping + lead (loose references to Brand / Member; admins can edit freely).
     brand_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Lead(s) responsible for the campaign. `responsible_member_id` is kept as the
+    # primary lead for back-compat; `responsible_member_ids` holds the full set so
+    # a campaign can have several people responsible.
     responsible_member_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    responsible_member_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     period_start: Mapped[str] = mapped_column(String(40), default="")
     period_end: Mapped[str] = mapped_column(String(40), default="")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
@@ -54,9 +57,28 @@ class ContentAsset(Base):
     # Campaign-level Drive folder (stores JSON + media for this campaign).
     drive_folder_url: Mapped[str] = mapped_column(Text, default="")
     # Section A — the 4 approved input files (see DEFAULT_INPUT_FILES).
-    input_files: Mapped[list] = mapped_column(JSON, default=lambda: [dict(f) for f in DEFAULT_INPUT_FILES])
+    input_files: Mapped[list] = mapped_column(JSON, default=lambda: [dict(f) for f in DEFAULT_INPUT_FILES], server_default=text("'[]'"))
     # Merged from the legacy Campaign module: creators assigned to this campaign.
-    influencer_ids: Mapped[list] = mapped_column(JSON, default=list)
+    influencer_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Section B — per-KOL campaign rows (each pulled from the influencer directory)
+    # + the campaign's selectable Scope-of-Work options. Flexible JSON so the row
+    # shape can evolve without a migration. See docs for the field contract.
+    kols: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    sow_options: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Section C/D — imported performance rows, separated from the KOL plan so the
+    # same creator can have distinct results for image / album / video without
+    # duplicating budget rows in Section B.
+    performance_results: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Per-campaign access control — User ids granted access (managers edit /
+    # viewers read). Set by admins only; admins always have access regardless.
+    assigned_user_ids: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Which budget figures are shown to the customer. Keys: rate, gen_code_price,
+    # boosting_cost, total. A missing/true key = shown; false = hidden from
+    # viewers (admins/managers always see them, with an eye indicator).
+    budget_show: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # Optimistic-concurrency counter — bumped on every update; a PUT carrying a
+    # stale row_version is rejected (409) so concurrent edits can't silently clobber.
+    row_version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -71,6 +93,7 @@ class ContentAssetBase(BaseModel):
     campaign_name: str = Field(..., min_length=1, max_length=200)
     brand_id: int | None = None
     responsible_member_id: int | None = None
+    responsible_member_ids: list[int] = Field(default_factory=list)
     period_start: str = ""
     period_end: str = ""
     status: str = "draft"
@@ -80,6 +103,11 @@ class ContentAssetBase(BaseModel):
     drive_folder_url: str = ""
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] = Field(default_factory=list)
+    assigned_user_ids: list[int] = Field(default_factory=list)
+    budget_show: dict[str, bool] = Field(default_factory=dict)
+    kols: list[dict[str, Any]] | None = None
+    sow_options: list[str] | None = None
+    performance_results: list[dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("status")
     @classmethod
@@ -101,6 +129,7 @@ class ContentAssetUpdate(BaseModel):
     campaign_name: str | None = Field(None, min_length=1, max_length=200)
     brand_id: int | None = None
     responsible_member_id: int | None = None
+    responsible_member_ids: list[int] | None = None
     period_start: str | None = None
     period_end: str | None = None
     status: str | None = None
@@ -110,6 +139,12 @@ class ContentAssetUpdate(BaseModel):
     drive_folder_url: str | None = None
     input_files: list[dict[str, Any]] | None = None
     influencer_ids: list[int] | None = None
+    assigned_user_ids: list[int] | None = None
+    budget_show: dict[str, bool] | None = None
+    kols: list[dict[str, Any]] | None = None
+    sow_options: list[str] | None = None
+    performance_results: list[dict[str, Any]] | None = None
+    row_version: int | None = None   # the version the client loaded (optimistic lock)
 
     @field_validator("status")
     @classmethod
@@ -122,7 +157,11 @@ class ContentAssetUpdate(BaseModel):
 class ContentAssetOut(ContentAssetBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    row_version: int = 1
     input_files: list[dict[str, Any]] = Field(default_factory=list)
+    kols: list[dict[str, Any]] = Field(default_factory=list)
+    sow_options: list[str] = Field(default_factory=list)
+    performance_results: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -130,3 +169,29 @@ class ContentAssetOut(ContentAssetBase):
 class ContentAssetList(BaseModel):
     total: int
     items: list[ContentAssetOut]
+
+
+class ContentAssetSummary(BaseModel):
+    id: int
+    client_name: str = ""
+    campaign_name: str
+    brand_id: int | None = None
+    responsible_member_ids: list[int] = Field(default_factory=list)
+    period_start: str = ""
+    period_end: str = ""
+    status: str = "draft"
+    can_edit: bool = False
+    kol_count: int = 0
+    approved_count: int = 0
+    posted_count: int = 0
+    pending_count: int = 0
+    overdue_count: int = 0
+    soon_count: int = 0
+    linked_file_count: int = 0
+    input_file_count: int = 0
+    budget_total: float = 0
+
+
+class ContentAssetSummaryList(BaseModel):
+    total: int
+    items: list[ContentAssetSummary]

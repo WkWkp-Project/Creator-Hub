@@ -12,15 +12,18 @@ import os
 import re
 import tempfile
 import uuid
+from io import BytesIO
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import crud, models, schemas
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
+from ..file_validation import validate_spreadsheet_upload
 from ..services import column_matcher as cm
 from ..services.tiers import tier_for_followers
 
@@ -29,6 +32,8 @@ settings = get_settings()
 
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "creatorhub_imports")
 os.makedirs(CACHE_DIR, exist_ok=True)
+MAX_IMPORT_ROWS = 5000   # guard against runaway files (DoS / DB bloat)
+MAX_IMPORT_COLUMNS = 200
 
 
 def _read_dataframe(path: str, filename: str) -> pd.DataFrame:
@@ -38,21 +43,115 @@ def _read_dataframe(path: str, filename: str) -> pd.DataFrame:
     return pd.read_excel(path, dtype=str, keep_default_na=False)
 
 
+def _validate_import_shape(df: pd.DataFrame) -> None:
+    if len(df) > MAX_IMPORT_ROWS:
+        raise HTTPException(400, f"ไฟล์มี {len(df)} แถว เกินลิมิต {MAX_IMPORT_ROWS} แถวต่อครั้ง")
+    if len(df.columns) > MAX_IMPORT_COLUMNS:
+        raise HTTPException(400, f"ไฟล์มี {len(df.columns)} คอลัมน์ เกินลิมิต {MAX_IMPORT_COLUMNS} คอลัมน์ต่อครั้ง")
+
+
 @router.get("/system-fields")
 def system_fields():
     """Expose the field catalogue so the UI can build mapping dropdowns."""
     return [{"value": k, "label": v} for k, v in cm.SYSTEM_FIELDS.items()]
 
 
+# A ready-to-fill template — headers chosen so the auto-matcher maps them 100%,
+# plus two example rows. No DB / sensitive data, so it needs no auth.
+TEMPLATE_ROWS: list[tuple[str, str, str]] = [
+    ("ชื่อ *", "Nong Aom", "Tee Talk"),
+    ("Handle", "@nongaom", "@teetalk"),
+    ("Niche", "Beauty", "Tech"),
+    ("Platform", "Instagram", "YouTube"),
+    ("Followers", "125000", "1.2M"),
+    ("Engagement Rate", "4.8%", "3.1%"),
+    ("Tier", "Micro", "Mega"),
+    ("ค่าตัว", "95000", "300000"),
+    ("ค่าเจนโค้ด", "10000", "20000"),
+    ("ค่าเมเนจฟี", "5000", "15000"),
+    ("ค่าเอเจนฟี %", "15", "20"),
+    ("Currency", "THB", "THB"),
+    ("Age", "26", "31"),
+    ("Location", "Bangkok", "Chiang Mai"),
+    ("Bio", "บิวตี้ครีเอเตอร์สายแต่งหน้า", "รีวิวแกดเจ็ต/มือถือ"),
+    ("Instagram Link", "https://instagram.com/nongaom", ""),
+    ("TikTok Link", "https://tiktok.com/@nongaom", ""),
+    ("YouTube Link", "", "https://youtube.com/@teetalk"),
+    ("Facebook Link", "", ""),
+    ("Verified", "yes", "no"),
+    ("Notes", "ลูกค้า VIP", ""),
+]
+_TEMPLATE_HELP = [
+    "วิธีใช้เทมเพลตนำเข้าอินฟลูเอนเซอร์",
+    "",
+    "1) กรอกข้อมูลในชีต \"Influencers\" — แถวที่ 2-3 เป็นตัวอย่าง (สีเทา) ให้ลบทิ้งก่อนใช้จริง",
+    "2) เก็บแถวหัวตาราง (แถวที่ 1) ไว้ — ระบบใช้แมชคอลัมน์อัตโนมัติ",
+    "3) บันทึกไฟล์ แล้วอัปโหลดผ่านปุ่ม Import Data ในหน้า Directory",
+    "",
+    "กฎการกรอก:",
+    "• ชื่อ = จำเป็น · คอลัมน์อื่นเว้นว่างได้",
+    "• ตัวเลข: ใส่ 1.2M / ฿95,000 / 5,000 / 4.8% ได้ (ระบบแปลงให้)",
+    "• Tier: Nano / Micro / Mega — เว้นว่าง = คำนวณจากยอด followers อัตโนมัติ",
+    "• ค่าเอเจนฟี = เปอร์เซ็นต์ (ใส่ 15 = 15%)",
+    "• Verified: yes / no",
+    "• ชื่อหรือ handle ซ้ำกับที่มีอยู่ = อัปเดต, ไม่ซ้ำ = เพิ่มใหม่",
+    "• หัวตารางสะกดใกล้เคียงก็พอ ระบบแมชภาษาไทย/อังกฤษให้",
+]
+
+
+@router.get("/template")
+def template():
+    """Download a fill-and-go Excel template with the recommended columns.
+
+    Sheet 1 holds headers + two grey example rows (delete before importing);
+    Sheet 2 holds the instructions, so guidance text never lands as import data.
+    """
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Influencers"
+    hdr_fill = PatternFill("solid", fgColor="E1121C")
+    hdr_font = Font(bold=True, color="FFFFFF", size=11)
+    ex_font = Font(color="9AA0A6", italic=True)   # examples look obviously like samples
+    thin = Side(style="thin", color="E5E5E8")
+    for c, (header, ex1, ex2) in enumerate(TEMPLATE_ROWS, start=1):
+        cell = ws.cell(row=1, column=c, value=header)
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = Border(bottom=thin, right=thin)
+        e1 = ws.cell(row=2, column=c, value=ex1); e1.font = ex_font
+        e2 = ws.cell(row=3, column=c, value=ex2); e2.font = ex_font
+        ws.column_dimensions[cell.column_letter].width = max(12, min(30, len(header) + 6))
+    ws.freeze_panes = "A2"
+
+    # Instructions on a separate sheet (the importer only reads the first sheet).
+    ws2 = wb.create_sheet("วิธีใช้ (อ่านก่อน)")
+    ws2.column_dimensions["A"].width = 90
+    ws2.cell(row=1, column=1).font = Font(bold=True, size=13, color="E1121C")
+    for i, line in enumerate(_TEMPLATE_HELP, start=1):
+        ws2.cell(row=i, column=1, value=line)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="influencer_import_template.xlsx"'},
+    )
+
+
 @router.post("/preview", response_model=schemas.ImportPreview)
 async def preview(file: UploadFile = File(...), _: models.User = Depends(require_admin)):
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in settings.extensions:
-        raise HTTPException(400, f"Unsupported file type '{ext}'. Allowed: {settings.extensions}")
-
     raw = await file.read()
-    if len(raw) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File exceeds {settings.max_upload_mb}MB limit")
+    ext = validate_spreadsheet_upload(
+        file.filename, raw,
+        allowed_extensions=settings.extensions,
+        max_mb=settings.max_upload_mb,
+    )
 
     upload_id = uuid.uuid4().hex
     stored = os.path.join(CACHE_DIR, f"{upload_id}{ext}")
@@ -66,6 +165,7 @@ async def preview(file: UploadFile = File(...), _: models.User = Depends(require
         df = _read_dataframe(stored, file.filename or "")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not parse file: {exc}") from exc
+    _validate_import_shape(df)
 
     suggestions: list[schemas.ColumnSuggestion] = []
     for col in df.columns:
@@ -95,7 +195,7 @@ async def preview(file: UploadFile = File(...), _: models.User = Depends(require
 
 @router.post("/commit", response_model=schemas.ImportResult)
 def commit(payload: schemas.ImportCommit,
-           _: models.User = Depends(require_admin),
+           actor: models.User = Depends(require_admin),
            db: Session = Depends(get_db)):
     # upload_id is a server-generated uuid4 hex — reject anything else so it can
     # never be used to traverse outside the cache dir.
@@ -108,6 +208,7 @@ def commit(payload: schemas.ImportCommit,
     stored = os.path.join(CACHE_DIR, f"{payload.upload_id}{meta['ext']}")
 
     df = _read_dataframe(stored, meta["filename"])
+    _validate_import_shape(df)
 
     # file_column -> system_field (drop unmapped / null targets)
     mapping = {m.file_column: m.system_field for m in payload.mappings if m.system_field}
@@ -124,10 +225,13 @@ def commit(payload: schemas.ImportCommit,
             for file_col, sys_field in mapping.items():
                 if file_col not in df.columns:
                     continue
+                raw = str(row[file_col]).strip()
+                # Skip blank cells — never overwrite existing data with "" / 0,
+                # and let model defaults apply on create.
+                if not raw or raw.lower() in {"nan", "none", "-"}:
+                    continue
                 if sys_field in cm.LINK_FIELDS:
-                    url = str(row[file_col]).strip()
-                    if url and url.lower() not in {"nan", "none", "-"}:
-                        social[cm.LINK_FIELDS[sys_field]] = url
+                    social[cm.LINK_FIELDS[sys_field]] = raw
                 else:
                     record[sys_field] = cm.coerce(sys_field, row[file_col])
             if social:
@@ -161,6 +265,10 @@ def commit(payload: schemas.ImportCommit,
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Row {int(idx) + 2}: {exc}")
 
+    from .. import audit
+    audit.record(db, entity="import", user=actor, action="commit",
+                 summary=f"นำเข้าอินฟลู: created {created}, updated {updated}, skipped {skipped}",
+                 detail={"created": created, "updated": updated, "skipped": skipped, "errors": len(errors)})
     db.commit()
 
     # cleanup cache

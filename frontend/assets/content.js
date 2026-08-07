@@ -221,7 +221,7 @@
     bGrid.appendChild(el(block("verified", "Approval", (approval.approver || approval.note) ? `${approval.approver ? `<div>ผู้อนุมัติ: <b>${esc(approval.approver)}</b></div>` : ""}${approval.note ? `<div class="text-on-surface-variant mt-1">${esc(approval.note)}</div>` : ""}` : "—")));
     view.appendChild(secB);
 
-    view.querySelector("[data-back]").addEventListener("click", () => (location.hash = "#/content"));
+    view.querySelector("[data-back]").addEventListener("click", () => CH.goBack("#/content"));
     view.querySelector("[data-edit]")?.addEventListener("click", () => openForm(brief));
     view.querySelector("[data-del]")?.addEventListener("click", async () => {
       if (!confirm(`ลบ brief "${brief.title}"?`)) return;

@@ -89,9 +89,10 @@ def update(db: Session, obj: models.Influencer, data: schemas.InfluencerUpdate) 
     changes = data.model_dump(exclude_unset=True)
     for key, value in changes.items():
         setattr(obj, key, value)
-    # Re-derive tier when followers changed but no explicit tier was supplied,
-    # or when tier was cleared (sent as empty string = "auto").
-    if not obj.tier or ("followers" in changes and not changes.get("tier")):
+    # Re-derive tier only when it is empty or explicitly cleared (sent as "" =
+    # "auto"). A standard or hand-entered custom tier survives a followers-only
+    # edit — clearing the field is how the user opts back into auto-derivation.
+    if not obj.tier or ("tier" in changes and not changes["tier"]):
         obj.tier = tier_for_followers(obj.followers)
     db.commit()
     db.refresh(obj)

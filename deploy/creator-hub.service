@@ -1,0 +1,28 @@
+# systemd unit for the Creator Hub backend (FastAPI/uvicorn).
+# Serves the API AND the static frontend on one port; runs Alembic migrations on
+# boot. Put this at /etc/systemd/system/creator-hub.service and edit the 4 paths
+# + the User to match your Plesk subscription, then:
+#   systemctl daemon-reload && systemctl enable --now creator-hub
+#
+# Replace __DOMAIN__ and __SYSUSER__ (the Plesk subscription's system user, seen
+# in Plesk → Subscription → Web Hosting Access). APP_DIR is where Plesk Git
+# deployed the repo (the folder that contains backend/ and frontend/).
+[Unit]
+Description=Creator Hub (FastAPI)
+After=network.target postgresql.service
+
+[Service]
+User=__SYSUSER__
+WorkingDirectory=/var/www/vhosts/__DOMAIN__/creator-hub/influencer-hub
+EnvironmentFile=/var/www/vhosts/__DOMAIN__/creator-hub/influencer-hub/backend/.env
+# One worker keeps the in-memory login throttle + account lockout correct.
+# To scale past one worker, move those to a shared store (Redis) first.
+ExecStart=/var/www/vhosts/__DOMAIN__/creator-hub/influencer-hub/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8020 --workers 1
+Restart=always
+RestartSec=3
+# Harden a little
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

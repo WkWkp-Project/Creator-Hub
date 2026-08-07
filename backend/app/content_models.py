@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import DateTime, Integer, String, JSON, Text
+from sqlalchemy import DateTime, Integer, String, JSON, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -37,8 +37,8 @@ class ContentBrief(Base):
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
 
     # Flexible content — see module docstring.
-    section_a: Mapped[dict] = mapped_column(JSON, default=dict)
-    section_b: Mapped[dict] = mapped_column(JSON, default=dict)
+    section_a: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    section_b: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     notes: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

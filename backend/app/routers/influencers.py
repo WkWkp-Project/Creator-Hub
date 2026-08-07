@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import crud, models, schemas
+from .. import audit, crud, models, schemas
 from ..database import get_db
 from ..deps import get_current_user, require_admin
+from .settings import get_directory_hidden_fields
 
 # Export column order: system field -> friendly header.
 # Headers are chosen so the exported file re-imports cleanly via auto-matching.
@@ -32,7 +33,27 @@ LINK_EXPORT = [
 router = APIRouter(prefix="/api/influencers", tags=["influencers"])
 
 
-@router.get("", response_model=schemas.InfluencerList)
+def _serialize(obj) -> dict:
+    """ORM influencer -> JSON-able dict (includes computed fee fields)."""
+    return schemas.InfluencerOut.model_validate(obj).model_dump(mode="json")
+
+
+def _gate_and_redact(items: list[dict], user: models.User, db: Session) -> list[dict]:
+    """Admins see everything. A non-admin must be granted directory_access, and
+    the globally-configured sensitive fields are stripped from the payload so
+    they never reach the client (not merely hidden in the UI)."""
+    if user.role == "admin":
+        return items
+    if not user.directory_access:
+        raise HTTPException(403, "คุณไม่มีสิทธิ์ดู Directory — ติดต่อแอดมินเพื่อเปิดสิทธิ์")
+    hidden = get_directory_hidden_fields(db)
+    for d in items:
+        for k in hidden:
+            d.pop(k, None)
+    return items
+
+
+@router.get("")
 def list_influencers(
     search: str | None = None,
     platform: str | None = None,
@@ -44,7 +65,7 @@ def list_influencers(
     sort: str = "name",
     skip: int = 0,
     limit: int = Query(50, le=200),
-    _: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     total, items = crud.list_influencers(
@@ -52,14 +73,15 @@ def list_influencers(
         min_price=min_price, max_price=max_price, verified=verified,
         tier=tier, sort=sort, skip=skip, limit=limit,
     )
-    return {"total": total, "items": items}
+    return {"total": total, "items": _gate_and_redact([_serialize(o) for o in items], user, db)}
 
 
 @router.get("/export")
 def export_influencers(format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
-                      _: models.User = Depends(get_current_user),
+                      _: models.User = Depends(require_admin),
                       db: Session = Depends(get_db)):
-    """Download the whole roster as Excel or CSV (re-importable round-trip)."""
+    """Download the whole roster as Excel or CSV (re-importable round-trip).
+    Admin-only: the export always contains the full fee breakdown."""
     _, items = crud.list_influencers(db, sort="name", limit=100000)
 
     rows = []
@@ -100,40 +122,72 @@ def export_influencers(format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
     )
 
 
-@router.get("/{influencer_id}", response_model=schemas.InfluencerOut)
+@router.get("/{influencer_id}")
 def get_influencer(influencer_id: int,
-                   _: models.User = Depends(get_current_user),
+                   user: models.User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
     obj = crud.get(db, influencer_id)
     if not obj:
         raise HTTPException(404, "Influencer not found")
-    return obj
+    return _gate_and_redact([_serialize(obj)], user, db)[0]
 
 
 @router.post("", response_model=schemas.InfluencerOut, status_code=201)
 def create_influencer(data: schemas.InfluencerCreate,
-                      _: models.User = Depends(require_admin),
+                      actor: models.User = Depends(require_admin),
                       db: Session = Depends(get_db)):
-    return crud.create(db, data)
+    obj = crud.create(db, data)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=obj.id,
+        user=actor,
+        action="created",
+        summary=f"Created influencer: {obj.name}",
+    )
+    db.commit()
+    return obj
 
 
 @router.put("/{influencer_id}", response_model=schemas.InfluencerOut)
 def update_influencer(
     influencer_id: int, data: schemas.InfluencerUpdate,
-    _: models.User = Depends(require_admin),
+    actor: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     obj = crud.get(db, influencer_id)
     if not obj:
         raise HTTPException(404, "Influencer not found")
-    return crud.update(db, obj, data)
+    changed_fields = sorted(data.model_dump(exclude_unset=True).keys())
+    obj = crud.update(db, obj, data)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=obj.id,
+        user=actor,
+        action="updated",
+        summary=f"Updated influencer: {obj.name}",
+        detail={"fields": changed_fields},
+    )
+    db.commit()
+    return obj
 
 
 @router.delete("/{influencer_id}", status_code=204)
 def delete_influencer(influencer_id: int,
-                      _: models.User = Depends(require_admin),
+                      actor: models.User = Depends(require_admin),
                       db: Session = Depends(get_db)):
     obj = crud.get(db, influencer_id)
     if not obj:
         raise HTTPException(404, "Influencer not found")
+    name = obj.name
     crud.delete(db, obj)
+    audit.record(
+        db,
+        entity="influencer",
+        entity_id=influencer_id,
+        user=actor,
+        action="deleted",
+        summary=f"Deleted influencer: {name}",
+    )
+    db.commit()

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import audit, models
 from ..content_models import (
     ContentBrief,
     ContentBriefCreate,
@@ -50,9 +50,18 @@ def get_content(brief_id: int, _: models.User = Depends(get_current_user), db: S
 
 
 @router.post("", response_model=ContentBriefOut, status_code=201)
-def create_content(data: ContentBriefCreate, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def create_content(data: ContentBriefCreate, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = ContentBrief(**data.model_dump())
     db.add(obj)
+    db.flush()
+    audit.record(
+        db,
+        entity="content",
+        entity_id=obj.id,
+        user=actor,
+        action="created",
+        summary=f"Created content brief: {obj.title}",
+    )
     db.commit()
     db.refresh(obj)
     return obj
@@ -62,23 +71,42 @@ def create_content(data: ContentBriefCreate, _: models.User = Depends(require_ad
 def update_content(
     brief_id: int,
     data: ContentBriefUpdate,
-    _: models.User = Depends(require_admin),
+    actor: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     obj = db.get(ContentBrief, brief_id)
     if not obj:
         raise HTTPException(404, "Content brief not found")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    for key, value in changes.items():
         setattr(obj, key, value)
+    audit.record(
+        db,
+        entity="content",
+        entity_id=obj.id,
+        user=actor,
+        action="updated",
+        summary=f"Updated content brief: {obj.title}",
+        detail={"fields": sorted(changes.keys())},
+    )
     db.commit()
     db.refresh(obj)
     return obj
 
 
 @router.delete("/{brief_id}", status_code=204)
-def delete_content(brief_id: int, _: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_content(brief_id: int, actor: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     obj = db.get(ContentBrief, brief_id)
     if not obj:
         raise HTTPException(404, "Content brief not found")
+    title = obj.title
     db.delete(obj)
+    audit.record(
+        db,
+        entity="content",
+        entity_id=brief_id,
+        user=actor,
+        action="deleted",
+        summary=f"Deleted content brief: {title}",
+    )
     db.commit()

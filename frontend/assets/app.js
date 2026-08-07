@@ -35,6 +35,9 @@
   };
 
   // Social platform link icons (Font Awesome brands) — used in cards + profile.
+  const CLOSED_CAMPAIGN_STATUSES = new Set(["completed", "complete", "done", "success", "succeeded", "cancelled"]);
+  const isClosedCampaignStatus = (status) => CLOSED_CAMPAIGN_STATUSES.has(String(status || "").trim().toLowerCase());
+
   const SOCIAL_META = {
     instagram: { icon: "fa-brands fa-instagram", label: "Instagram", color: "#E1306C" },
     tiktok:    { icon: "fa-brands fa-tiktok",    label: "TikTok",    color: "#010101" },
@@ -64,7 +67,7 @@
     if (!res.ok) {
       let msg = res.statusText;
       try { msg = (await res.json()).detail || msg; } catch (_) {}
-      throw new Error(msg);
+      const err = new Error(msg); err.status = res.status; throw err;
     }
     return res.status === 204 ? null : res.json();
   }
@@ -101,18 +104,28 @@
   }
 
   // ---------- influencer tiers (mirror backend services/tiers.py) ----------
-  const TIERS = ["Nano", "Micro", "Mega"];
+  const TIERS = ["Nano", "Micro", "Mid-Tier", "Macro", "Mega"];
   function tierForFollowers(n) {
     n = Number(n) || 0;
     if (n >= 1_000_000) return "Mega";
+    if (n >= 100_000) return "Macro";
+    if (n >= 50_000) return "Mid-Tier";
     if (n >= 10_000) return "Micro";
     return "Nano";
   }
-  const TIER_ICON = { Nano: "eco", Micro: "trending_up", Mega: "stars" };
+  const TIER_ICON = { Nano: "eco", Micro: "trending_up", "Mid-Tier": "insights", Macro: "rocket_launch", Mega: "stars" };
   function tierChip(tier) {
-    if (!tier || !TIERS.includes(tier)) return "";
-    return `<span class="tier-chip tier-${tier}"><span class="material-symbols-outlined text-[13px]">${TIER_ICON[tier]}</span>${tier}</span>`;
+    if (!tier) return "";
+    const known = TIERS.includes(tier);
+    const icon = TIER_ICON[tier] || "workspace_premium";
+    return `<span class="tier-chip ${known ? `tier-${tier}` : "tier-custom"}"><span class="material-symbols-outlined text-[13px]">${icon}</span>${esc(tier)}</span>`;
   }
+  // Short readable date for "last updated" stamps (Gregorian — avoids Buddhist-era).
+  const fmtDate = (iso) => {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+    catch (_) { return "—"; }
+  };
   // Resolve an upload path / URL to something the browser can load.
   const mediaSrc = (url) => (url && url.startsWith("/uploads/") ? (window.API_BASE || "") + url : url);
 
@@ -149,19 +162,67 @@
   const routes = {};
   const route = (path, handler) => (routes[path] = handler);
 
+  // ---------- in-app back history ----------
+  // Remembers the last few visited views so a "back" button returns to where the
+  // user actually came from (not a hard-coded route). Capped at 4 entries.
+  const MAX_HISTORY = 4;
+  let navHistory = [];
+  let currentHash = null;
+  let goingBack = false;
+  function recordNav(hash) {
+    if (goingBack) { goingBack = false; }            // arrived here via goBack(): don't re-push
+    else if (currentHash && currentHash !== hash) {
+      navHistory.push(currentHash);
+      while (navHistory.length > MAX_HISTORY) navHistory.shift();
+    }
+    currentHash = hash;
+  }
+  function goBack(fallback = "#/directory") {
+    if (navHistory.length) { goingBack = true; location.hash = navHistory.pop(); }
+    else { location.hash = fallback; }
+  }
+
+  // Monotonic render token. Route handlers are async (they await the API), so a
+  // navigation that starts while a previous one is still loading would otherwise
+  // let the old handler's late appendChild() land in the new page — stacking two
+  // routes. We render each route into a fresh, off-DOM element and only swap it
+  // in if it's still the current render; a superseded render is discarded whole,
+  // so its late async appends go to a detached node no one sees.
+  let renderGen = 0;
+  function syncContextualExport(hash) {
+    const button = document.querySelector('[data-action="export"]');
+    if (!button) return;
+    const routeName = parseHash(hash)[0];
+    const campaignRoute = ["assets", "asset", "brand"].includes(routeName);
+    const directoryRoute = ["directory", "influencer"].includes(routeName);
+    const canExportCampaign = campaignRoute && ["admin", "manager"].includes(auth?.user?.role);
+    const canExportDirectory = directoryRoute && isAdmin();
+    button.hidden = !(canExportCampaign || canExportDirectory);
+    button.dataset.exportContext = canExportCampaign ? "campaign" : (canExportDirectory ? "directory" : "");
+    const label = button.querySelector("[data-export-label]");
+    if (label) label.textContent = canExportCampaign ? "Export Campaign" : "Export Directory";
+  }
+
   async function render() {
+    const gen = ++renderGen;
     const hash = location.hash || "#/directory";
+    recordNav(hash);
+    syncContextualExport(hash);
     const [path, param] = hash.replace(/^#/, "").split("/").filter(Boolean).length
       ? parseHash(hash) : ["directory", null];
     // sidebar active state
     document.querySelectorAll(".nav-link").forEach((a) => {
       a.classList.toggle("active", a.dataset.route && hash.startsWith(a.dataset.route));
     });
-    const view = $("#view");
-    view.innerHTML = "";
+    const live = $("#view");
+    const view = document.createElement("div");
+    view.id = "view";                 // becomes the live #view once committed
+    view.className = live.className;   // keep the layout classes handlers expect
     const handler = routes[path] || routes["directory"];
     try { await handler(view, param); }
     catch (e) { view.appendChild(el(`<div class="text-error p-lg">Error: ${esc(e.message)}</div>`)); }
+    if (gen !== renderGen) return;     // a newer navigation won — drop this render
+    $("#view").replaceWith(view);      // swap in the freshly built page (old one discarded)
   }
 
   function parseHash(hash) {
@@ -185,7 +246,7 @@
           <p class="text-on-surface-variant mt-xs">Browse your verified network of top-performing influencers.</p>
         </div>
         <div class="md:col-span-7 flex flex-wrap gap-sm justify-end items-end">
-          ${filterSelect("tier","Tier",["All Tiers","Nano","Micro","Mega"])}
+          ${filterSelect("tier","Tier",["All Tiers","Nano","Micro","Mid-Tier","Macro","Mega"])}
           ${filterSelect("platform","Platform",["All Platforms","Instagram","TikTok","YouTube"])}
           ${filterSelect("niche","Niche",["Any Niche","Beauty","Tech","Lifestyle","Fitness","Food","Travel","Art"])}
           ${filterSelect("price","Price Range (฿)",["Any Price","< ฿50k","฿50k - ฿150k","฿150k - ฿300k","> ฿300k"])}
@@ -236,7 +297,16 @@
     Object.entries(priceBounds(filterState.price)).forEach(([k, v]) => p.set(k, v));
     p.set("limit", "60");
 
-    const data = await api("/influencers?" + p.toString());
+    let data;
+    try {
+      data = await api("/influencers?" + p.toString());
+    } catch (e) {
+      grid.innerHTML = "";
+      grid.appendChild(el(e.status === 403
+        ? `<div class="col-span-full text-center py-3xl text-on-surface-variant"><span class="material-symbols-outlined text-[48px] opacity-40">lock</span><p class="mt-sm font-semibold text-[16px]">คุณไม่มีสิทธิ์ดู Directory</p><p class="text-[13px]">ติดต่อแอดมินเพื่อขอเปิดสิทธิ์การเข้าถึง</p></div>`
+        : `<div class="col-span-full text-error p-lg">${esc(e.message)}</div>`));
+      return;
+    }
     grid.innerHTML = "";
     if (!data.items.length) {
       grid.appendChild(el(`<div class="col-span-full text-center py-3xl text-on-surface-variant">
@@ -280,6 +350,9 @@
               <span class="text-[20px] font-bold text-primary">${(inf.engagement_rate || 0).toFixed(1)}%</span>
             </div>
           </div>
+          <div class="mt-sm text-[11px] text-on-surface-variant flex items-center gap-1" title="วันที่อัปเดตข้อมูลล่าสุด (เช่น จำนวนผู้ติดตาม)">
+            <span class="material-symbols-outlined text-[13px]">update</span>อัปเดต ${fmtDate(inf.updated_at)}
+          </div>
         </div>
       </article>`);
     c.addEventListener("click", () => (location.hash = `#/influencer/${inf.id}`));
@@ -296,7 +369,7 @@
     // back + header
     view.appendChild(el(`
       <button data-action="back" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold">
-        <span class="material-symbols-outlined text-[18px]">arrow_back</span> Back to Directory</button>`));
+        <span class="material-symbols-outlined text-[18px]">arrow_back</span> ย้อนกลับ</button>`));
 
     const niches = (inf.niche || "").split(",").map((n) => n.trim()).filter(Boolean);
     view.appendChild(el(`
@@ -315,6 +388,7 @@
             </div>
           </div>
           ${inf.location || inf.handle ? `<p class="text-[14px] text-on-surface-variant mt-1">${esc(inf.handle || "")}${inf.location ? " · " + esc(inf.location) : ""}${inf.active_since ? " · active since " + esc(inf.active_since) : ""}</p>` : ""}
+          <p class="text-[12px] text-on-surface-variant mt-1 flex items-center gap-1" title="วันที่อัปเดตข้อมูลล่าสุด"><span class="material-symbols-outlined text-[14px]">update</span>อัปเดตข้อมูลล่าสุด ${fmtDate(inf.updated_at)}</p>
           ${Object.keys(inf.social_links || {}).length ? `<div class="mt-sm">${socialIcons(inf.social_links, 36)}</div>` : ""}
           <p class="text-on-surface-variant mt-sm leading-relaxed">${esc(inf.bio || "No bio provided.")}</p>
           <div class="flex gap-sm mt-md" data-admin-only>
@@ -353,7 +427,7 @@
     view.appendChild(reachRow);
 
     // Scope of work + Financial breakdown
-    const midRow = el(`<section class="grid grid-cols-1 lg:grid-cols-2 gap-gutter"></section>`);
+    const midRow = el(`<section class="grid grid-cols-1 gap-gutter"></section>`);
     const scope = (inf.scope_of_work || []);
     midRow.appendChild(el(`
       <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
@@ -378,35 +452,10 @@
         </div>
       </div>`));
 
-    const feeRow = (label, val) => `
-      <div class="flex justify-between items-center py-3 border-b border-outline-variant">
-        <span class="text-on-surface">${label}</span><span class="font-semibold text-[18px]">${fmtMoney(val, ccy)}</span></div>`;
-    midRow.appendChild(el(`
-      <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
-        <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center">
-          <h3 class="text-[20px] font-semibold">Financial Breakdown</h3>
-          <span class="bg-secondary-container text-on-secondary-container text-[12px] font-semibold px-sm py-1 rounded-full">Est. Rate</span>
-        </div>
-        <div class="p-lg pt-0">
-          ${feeRow("Base Rate <span class='text-on-surface-variant'>(ค่าตัว)</span>", inf.base_rate)}
-          ${feeRow("Code Generation Fee <span class='text-on-surface-variant'>(ค่าเจนโค้ด)</span>", inf.code_gen_fee)}
-          ${feeRow("Management Fee <span class='text-on-surface-variant'>(ค่าเมเนจฟี)</span>", inf.management_fee)}
-          <div class="flex justify-between items-center py-3 border-b border-outline-variant bg-surface-container-low/40">
-            <span class="text-on-surface-variant">Subtotal <span class="text-[12px]">(ก่อนเอเจนฟี)</span></span>
-            <span class="font-semibold text-[16px] text-on-surface-variant">${fmtMoney(inf.subtotal_fee, ccy)}</span>
-          </div>
-          <div class="flex justify-between items-center py-3 border-b border-outline-variant">
-            <span class="text-on-surface">Agency Fee <span class="text-on-surface-variant">(ค่าเอเจนฟี)</span>
-              <span class="ml-1 bg-primary-fixed text-primary text-[12px] font-bold px-2 py-[2px] rounded-full">${(inf.agency_fee_pct || 0).toFixed(inf.agency_fee_pct % 1 ? 1 : 0)}%</span>
-            </span>
-            <span class="font-semibold text-[18px]">${fmtMoney(inf.agency_amount, ccy)}</span>
-          </div>
-          <div class="mt-md bg-surface-container-low rounded-xl px-md py-3 flex justify-between items-center">
-            <span class="text-[18px] font-bold">Total Fee <span class="text-[13px] font-medium text-on-surface-variant">(รวมทั้งหมด)</span></span>
-            <span class="text-[24px] font-extrabold text-primary">${fmtMoney(inf.total_fee, ccy)}</span>
-          </div>
-        </div>
-      </div>`));
+    // Financial Breakdown card removed — per-KOL fees are entered per campaign in
+    // Section B (KOL Plan), so the influencer-level fee estimate is no longer shown
+    // here (and no longer prefills Section B). The fee fields still exist on the
+    // model for import/back-office use.
     view.appendChild(midRow);
 
     // Campaign fit + past campaigns
@@ -462,7 +511,7 @@
     view.appendChild(bottomRow);
 
     // wire actions
-    view.querySelector("[data-action=back]").addEventListener("click", () => (location.hash = "#/directory"));
+    view.querySelector("[data-action=back]").addEventListener("click", () => goBack("#/directory"));
     view.querySelectorAll("[data-action=edit]").forEach((b) => b.addEventListener("click", () => openInfluencerForm(inf)));
     view.querySelector("[data-action=delete]").addEventListener("click", async () => {
       if (!confirm(`Remove ${inf.name}? This cannot be undone.`)) return;
@@ -475,6 +524,27 @@
   // ============================================================
   //  ANALYTICS (simple stats overview)
   // ============================================================
+  route("home", async (view) => {
+    view.appendChild(el(`<div class="flex items-end justify-between flex-wrap gap-md">
+      <div><h1 class="text-[32px] font-semibold tracking-tight">Dashboard</h1><p class="text-on-surface-variant mt-xs">ภาพรวมแคมเปญ · งบ · งานที่ต้องสนใจ</p></div>
+      <button data-route="#/assets" class="bg-primary text-on-primary font-semibold rounded-lg py-2 px-md hover:bg-primary-container shadow-sm flex items-center gap-1"><span class="material-symbols-outlined text-[20px]">grid_view</span>ไปที่แคมเปญ</button></div>`));
+    const [dashboard, activity] = await Promise.all([
+      api("/assets/dashboard").catch(() => ({ active: 0, pending: 0, overdue: 0, budget_total: 0, attention: [] })),
+      isAdmin() ? api("/stats/activity?limit=10").catch(() => []) : [],
+    ]);
+    const money = (n) => "฿" + Math.round(n || 0).toLocaleString("en-US");
+    const stat = (label, val, icon) => `<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg flex items-center gap-md"><div class="w-12 h-12 rounded-xl bg-primary-fixed flex items-center justify-center"><span class="material-symbols-outlined text-primary">${icon}</span></div><div><div class="text-[26px] font-extrabold leading-none font-poppins">${val}</div><div class="text-[13px] text-on-surface-variant font-semibold mt-1">${label}</div></div></div>`;
+    view.appendChild(el(`<section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter">${isAdmin() ? stat("งบแคมเปญรวม", money(dashboard.budget_total), "payments") : ""}${stat("แคมเปญ Active", dashboard.active, "grid_view")}${stat("KOL รออนุมัติ", dashboard.pending, "pending_actions")}${stat("งานเลยกำหนด", dashboard.overdue, "warning")}</section>`));
+    const attRows = (dashboard.attention || []).map((a) =>
+      `<div data-route="#/asset/${a.id}" class="flex justify-between items-center gap-md py-2.5 border-b border-outline-variant/60 cursor-pointer hover:bg-surface-container-low/40 px-sm rounded-lg"><div class="min-w-0"><div class="font-semibold truncate">${esc(a.campaign_name)}</div><div class="text-[12px] text-on-surface-variant truncate">${esc(a.client_name || "")}</div></div><div class="text-[12px] font-bold whitespace-nowrap">${a.overdue ? `<span style="color:#b80f18">⚠ ${a.overdue}</span>` : ""}${a.overdue && a.soon ? " · " : ""}${a.soon ? `<span style="color:#9a6700">🕒 ${a.soon}</span>` : ""}</div></div>`).join("") || `<div class="text-[13px] text-on-surface-variant">ไม่มีงานค้าง 🎉</div>`;
+    const actRows = (activity || []).map((v) => `<div class="flex items-start gap-sm py-2 border-b border-outline-variant/50"><span class="material-symbols-outlined text-[16px] text-on-surface-variant mt-0.5">${v.action === "created" ? "add_circle" : v.action === "deleted" ? "delete" : "edit"}</span><div class="min-w-0"><div class="text-[13px] truncate">${esc(v.summary || v.action)}</div><div class="text-[11px] text-on-surface-variant">${esc(v.actor || "")} · ${(() => { try { return new Date(v.at).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) { return ""; } })()}</div></div></div>`).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
+    const panel = (title, icon, inner) => `<div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg"><h3 class="text-[18px] font-semibold mb-md flex items-center gap-sm"><span class="material-symbols-outlined text-primary">${icon}</span>${title}</h3>${inner}</div>`;
+    const grid = el(`<section class="grid grid-cols-1 lg:grid-cols-2 gap-gutter"></section>`);
+    grid.appendChild(el(panel("ต้องสนใจ · Deadlines", "warning", `<div class="flex flex-col">${attRows}</div>`)));
+    if (isAdmin()) grid.appendChild(el(panel("ความเคลื่อนไหวล่าสุด", "history", `<div class="flex flex-col">${actRows}</div>`)));
+    view.appendChild(grid);
+  });
+
   route("analytics", async (view) => {
     const s = await api("/stats");
     view.appendChild(el(`<h1 class="text-[32px] font-semibold tracking-tight">Analytics Overview</h1>`));
@@ -499,13 +569,34 @@
     view.appendChild(el(`<section class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
       ${breakdown("By Tier", s.tiers || [])}${breakdown("By Niche", s.niches)}${breakdown("By Platform", s.platforms)}</section>`));
 
+    // ----- Campaign budgets — real money through the campaign suite (ContentAsset), admin-only -----
+    if (isAdmin()) try {
+      const cb = await api("/stats/campaign-budgets");
+      const money = (n) => "฿" + Math.round(n || 0).toLocaleString("en-US");
+      const line = (label, val) => `<div class="flex justify-between items-center gap-md"><span class="truncate">${esc(label)}</span><span class="font-semibold whitespace-nowrap">${money(val)}</span></div>`;
+      const brandRows = (cb.by_brand || []).map((r) => line(r.brand, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">ยังไม่มีงบในแคมเปญ</div>`;
+      const statusRows = (cb.by_status || []).map((r) => line(r.status, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
+      const leadRows = (cb.by_lead || []).slice(0, 6).map((r) => line(r.lead, r.total)).join("") || `<div class="text-[13px] text-on-surface-variant">—</div>`;
+      view.appendChild(el(`<section class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg">
+        <div class="flex items-center justify-between flex-wrap gap-sm mb-md">
+          <h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">payments</span>งบแคมเปญจริง · Campaign Budgets</h3>
+          <div class="text-right"><div class="text-[28px] font-extrabold font-poppins text-primary leading-none">${money(cb.total)}</div><div class="text-[12px] text-on-surface-variant mt-1">รวม ${cb.campaign_count} แคมเปญ</div></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-lg">
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามแบรนด์</div><div class="flex flex-col gap-sm">${brandRows}</div></div>
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามสถานะ</div><div class="flex flex-col gap-sm">${statusRows}</div></div>
+          <div><div class="text-[13px] font-semibold text-on-surface-variant mb-sm">ตามผู้รับผิดชอบ</div><div class="flex flex-col gap-sm">${leadRows}</div></div>
+        </div>
+      </section>`));
+    } catch (_) { /* stats optional */ }
+
     // ----- Niche performance comparison (multi-dimensional) -----
     const np = await api("/stats/niche-performance");
     const rows = np.niches || [];
     if (rows.length) {
       // best-in-class per dimension (for highlighting)
       const best = {};
-      const dims = ["avg_engagement_rate", "avg_growth_30d", "total_reach", "avg_fit_score", "reach_per_1k_thb"];
+      const dims = ["avg_engagement_rate", "avg_growth_30d", "total_reach", "avg_fit_score"];
       dims.forEach((d) => { best[d] = Math.max(...rows.map((r) => r[d] || 0)); });
       const maxReach = best.total_reach || 1;
       const hi = (r, d) => (r[d] === best[d] && r[d] > 0) ? "text-secondary font-bold" : "";
@@ -525,8 +616,6 @@
                 <th class="py-2 px-sm text-right">Avg ER</th>
                 <th class="py-2 px-sm text-right">Avg Growth</th>
                 <th class="py-2 px-sm text-right">Avg Fit</th>
-                <th class="py-2 px-sm text-right">Avg Fee</th>
-                <th class="py-2 px-sm text-right" title="Reach delivered per ฿1,000 of fee">Reach / ฿1k</th>
               </tr></thead>
               <tbody>
                 ${rows.map((r) => `
@@ -542,8 +631,6 @@
                     ${cell((r.avg_engagement_rate).toFixed(1)+"%", hi(r,'avg_engagement_rate'))}
                     ${cell((r.avg_growth_30d>=0?"+":"")+r.avg_growth_30d.toFixed(1)+"%", hi(r,'avg_growth_30d'))}
                     ${cell(Math.round(r.avg_fit_score)+"%", hi(r,'avg_fit_score'))}
-                    ${cell(fmtMoney(r.avg_total_fee), "")}
-                    ${cell(fmtNum(r.reach_per_1k_thb), hi(r,'reach_per_1k_thb'))}
                   </tr>`).join("")}
               </tbody>
             </table>
@@ -625,7 +712,7 @@
     const c = await api("/campaigns/" + id);
     const all = await api("/influencers?limit=200");
     const assigned = (c.influencer_ids || []).map((iid) => all.items.find((x) => x.id === iid)).filter(Boolean);
-    view.appendChild(el(`<button data-action="back-camp" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold"><span class="material-symbols-outlined text-[18px]">arrow_back</span> Back to Campaigns</button>`));
+    view.appendChild(el(`<button data-action="back-camp" class="self-start flex items-center gap-1 text-on-surface-variant hover:text-on-surface text-[14px] font-semibold"><span class="material-symbols-outlined text-[18px]">arrow_back</span> ย้อนกลับ</button>`));
     view.appendChild(el(`
       <article class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg">
         <div class="flex flex-wrap items-start gap-md">
@@ -661,7 +748,7 @@
     });
     view.appendChild(roster);
 
-    view.querySelector("[data-action=back-camp]").addEventListener("click", () => (location.hash = "#/campaigns"));
+    view.querySelector("[data-action=back-camp]").addEventListener("click", () => goBack("#/campaigns"));
     view.querySelector("[data-action=edit-camp]")?.addEventListener("click", () => openCampaignForm(c));
     view.querySelector("[data-action=del-camp]")?.addEventListener("click", async () => {
       if (!confirm(`ลบแคมเปญ "${c.name}"?`)) return;
@@ -743,6 +830,9 @@
   //  FINANCIALS
   // ============================================================
   route("financials", async (view) => {
+    // Financials hidden for now — its figures came from influencer fee estimates,
+    // not the live campaign spend in Section B. Remove the next line to restore.
+    location.hash = "#/home"; return;
     const f = await api("/stats/financials");
     view.appendChild(el(`<h1 class="text-[32px] font-semibold tracking-tight">Financials</h1>`));
     const stat = (label, val, icon, sub = "") => `
@@ -811,10 +901,10 @@
     const acct = el(`
       <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 p-lg max-w-xl">
         <h3 class="text-[20px] font-semibold mb-sm flex items-center gap-sm"><span class="material-symbols-outlined text-primary">manage_accounts</span>บัญชีของฉัน</h3>
-        <p class="text-[14px] text-on-surface-variant mb-md">${esc(auth.user.full_name || auth.user.username)} · @${esc(auth.user.username)} · ${auth.user.role === "admin" ? "ผู้ดูแล (Admin)" : "ผู้ชม (Viewer)"}</p>
+        <p class="text-[14px] text-on-surface-variant mb-md">${esc(auth.user.full_name || auth.user.username)} · @${esc(auth.user.username)} · ${auth.user.role === "admin" ? "ผู้ดูแล (Admin)" : auth.user.role === "manager" ? "ผู้จัดการ (Manager)" : "ผู้ชม (Viewer)"}</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-sm">
           ${pwInput("pw-cur", "รหัสผ่านปัจจุบัน")}
-          ${pwInput("pw-new", "รหัสผ่านใหม่ (≥ 4 ตัว)")}
+          ${pwInput("pw-new", "รหัสผ่านใหม่ (≥ 8 ตัว)")}
           ${pwInput("pw-confirm", "ยืนยันรหัสผ่านใหม่")}
         </div>
         <button id="pw-save" class="mt-md bg-primary text-on-primary font-semibold rounded-lg py-2 px-md hover:bg-primary-container shadow-sm flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">key</span>เปลี่ยนรหัสผ่าน</button>
@@ -824,7 +914,7 @@
       const current_password = acct.querySelector("#pw-cur").value;
       const new_password = acct.querySelector("#pw-new").value;
       const confirm = acct.querySelector("#pw-confirm").value;
-      if (new_password.length < 4) return toast("รหัสผ่านใหม่สั้นเกินไป (อย่างน้อย 4 ตัว)", "err");
+      if (new_password.length < 8) return toast("รหัสผ่านใหม่สั้นเกินไป (อย่างน้อย 8 ตัว)", "err");
       if (new_password !== confirm) return toast("ยืนยันรหัสผ่านไม่ตรงกัน", "err");
       try {
         await api("/auth/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current_password, new_password }) });
@@ -837,26 +927,48 @@
     if (isAdmin()) {
       const card = el(`
         <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
-          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center"><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">group</span>จัดการผู้ใช้</h3>
-            <button id="add-user" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">person_add</span>เพิ่มผู้ใช้</button></div>
-          <div class="p-lg" id="user-list"></div></div>`);
+          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center flex-wrap gap-sm"><div><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">group</span>จัดการผู้ใช้และสมาชิก</h3><p class="text-[12px] text-on-surface-variant mt-0.5">รายชื่อคนทั้งหมด — ทีมงาน · ผู้จัดการ · ลูกค้า (รวมหน้า Members เดิมไว้ที่นี่)</p></div>
+            <div class="flex gap-sm items-center flex-wrap">
+              <div class="relative"><span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span><input id="u-search" class="pl-9 bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[14px] focus:border-primary focus:ring-1 focus:ring-primary w-48" placeholder="ค้นหาผู้ใช้..."/></div>
+              <button id="sync-members" class="bg-surface border border-primary text-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-surface-container-low flex items-center gap-1" title="ลิงก์บัญชีผู้ใช้กับข้อมูลสมาชิก (ที่ใช้ใน Lead/เจ้าของแคมเปญ) ให้ตรงกัน"><span class="material-symbols-outlined text-[18px]">sync</span>ซิงค์ข้อมูล</button>
+              <button id="add-user" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">person_add</span>เพิ่มผู้ใช้</button>
+            </div></div>
+          <div class="p-lg flex flex-col gap-sm" id="user-list"></div></div>`);
       view.appendChild(card);
       const listEl = card.querySelector("#user-list");
-      const loadUsers = async () => {
-        const users = await api("/auth/users");
-        const byId = Object.fromEntries(users.map((u) => [u.id, u]));
-        listEl.innerHTML = `<div class="flex flex-col gap-sm">${users.map((u) => `
-          <div class="flex items-center gap-md py-2 border-b border-outline-variant/60" data-uid="${u.id}">
-            <span class="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold font-poppins">${esc((u.full_name||u.username)[0].toUpperCase())}</span>
-            <div class="flex-1 min-w-0"><div class="font-semibold truncate">${esc(u.full_name||u.username)}</div><div class="text-[12px] text-on-surface-variant">@${esc(u.username)}${u.id===auth.user.id?" · (คุณ)":""}</div></div>
-            <span class="${u.role==="admin"?"bg-primary-fixed text-primary":"bg-surface-container text-on-surface-variant"} text-[12px] font-semibold px-sm py-1 rounded-full">${u.role}</span>
-            <button data-edit class="text-on-surface-variant hover:text-primary" title="ดู/แก้ไขผู้ใช้"><span class="material-symbols-outlined text-[20px]">edit</span></button>
-            <button data-del class="text-on-surface-variant hover:text-error" title="ลบผู้ใช้"><span class="material-symbols-outlined text-[20px]">delete</span></button>
-          </div>`).join("")}</div>`;
-        listEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
-          const uid = +b.closest("[data-uid]").dataset.uid;
-          openUserForm(loadUsers, byId[uid]);
-        }));
+      const USER_GROUPS = [
+        { key: "admin", title: "Admins · ผู้ดูแล", icon: "shield_person" },
+        { key: "manager", title: "Managers · จัดการแคมเปญที่ได้รับ", icon: "manage_accounts" },
+        { key: "viewer", title: "Viewers · ดูเฉพาะที่ได้รับสิทธิ์", icon: "visibility" },
+      ];
+      let uQuery = "", allUsers = [];
+      const uCollapsed = {};
+      const userRow = (u) => `
+        <div class="flex items-center gap-md px-md py-2.5" data-uid="${u.id}">
+          <span class="w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold font-poppins shrink-0">${esc((u.full_name||u.username)[0].toUpperCase())}</span>
+          <div class="flex-1 min-w-0"><div class="font-semibold truncate">${esc(u.full_name||u.username)}${u.position?` <span class="text-[11px] font-normal text-on-surface-variant">· ${esc(u.position)}</span>`:""}${u.organization?` <span class="text-[11px] font-normal text-on-surface-variant">· ${esc(u.organization)}</span>`:""}</div><div class="text-[12px] text-on-surface-variant truncate">@${esc(u.username)}${u.email?` · ✉ ${esc(u.email)}`:""}${u.id===auth.user.id?" · (คุณ)":""}</div></div>
+          <span class="${u.role==="admin"?"bg-primary-fixed text-primary":"bg-surface-container text-on-surface-variant"} text-[12px] font-semibold px-sm py-1 rounded-full">${u.role}</span>
+          <button data-edit class="text-on-surface-variant hover:text-primary" title="ดู/แก้ไขผู้ใช้"><span class="material-symbols-outlined text-[20px]">edit</span></button>
+          <button data-del class="text-on-surface-variant hover:text-error" title="ลบผู้ใช้"><span class="material-symbols-outlined text-[20px]">delete</span></button>
+        </div>`;
+      const renderUsers = () => {
+        const qq = uQuery.trim().toLowerCase();
+        listEl.innerHTML = USER_GROUPS.map((g) => {
+          const all = allUsers.filter((u) => u.role === g.key);
+          const arr = qq ? all.filter((u) => `${u.full_name||""} ${u.username} ${u.email||""}`.toLowerCase().includes(qq)) : all;
+          const open = qq ? arr.length > 0 : !uCollapsed[g.key];
+          return `<div class="border border-outline-variant rounded-xl overflow-hidden">
+            <button class="w-full px-md py-2.5 flex items-center gap-sm hover:bg-surface-container-low transition-colors text-left" data-ug="${g.key}">
+              <span class="material-symbols-outlined text-on-surface-variant transition-transform ${open?"":"-rotate-90"}">expand_more</span>
+              <span class="material-symbols-outlined text-primary text-[18px]">${g.icon}</span>
+              <span class="font-semibold flex-1">${g.title}</span>
+              <span class="bg-surface-container text-on-surface-variant text-[12px] font-semibold px-sm py-0.5 rounded-full">${arr.length}${qq&&arr.length!==all.length?" / "+all.length:""}</span>
+            </button>
+            <div class="${open?"":"hidden"}">${arr.length?`<div class="max-h-[50vh] overflow-y-auto border-t border-outline-variant divide-y divide-outline-variant/50">${arr.map(userRow).join("")}</div>`:`<div class="px-md pb-md text-[13px] text-on-surface-variant">${qq?"ไม่พบผู้ใช้ที่ค้นหา":"— ไม่มี —"}</div>`}</div>
+          </div>`;
+        }).join("");
+        listEl.querySelectorAll("[data-ug]").forEach((b) => b.addEventListener("click", () => { if (uQuery.trim()) return; uCollapsed[b.dataset.ug] = !uCollapsed[b.dataset.ug]; renderUsers(); }));
+        listEl.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => openUserForm(loadUsers, allUsers.find((u) => u.id === +b.closest("[data-uid]").dataset.uid))));
         listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
           const uid = b.closest("[data-uid]").dataset.uid;
           if (!confirm("ลบผู้ใช้นี้?")) return;
@@ -864,8 +976,48 @@
           catch (e) { toast(e.message, "err"); }
         }));
       };
+      const loadUsers = async () => { allUsers = await api("/auth/users"); renderUsers(); };
+      card.querySelector("#u-search").addEventListener("input", (e) => { uQuery = e.target.value; renderUsers(); });
       card.querySelector("#add-user").addEventListener("click", () => openUserForm(loadUsers));
+      card.querySelector("#sync-members").addEventListener("click", async () => {
+        try {
+          const r = await api("/auth/reconcile-members", { method: "POST" });
+          toast(`ซิงค์แล้ว — สร้าง Member ใหม่ ${r.members_created} · สร้าง User ใหม่ ${r.users_created}${r.skipped_no_email ? ` · ข้าม ${r.skipped_no_email} login ระบบ` : ""}`);
+          loadUsers();
+        } catch (e) { toast(e.message, "err"); }
+      });
       await loadUsers();
+
+      // --- Directory access: which fields are hidden from non-admin viewers ---
+      const dirCard = el(`
+        <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-1 overflow-hidden">
+          <div class="px-lg py-md border-b border-outline-variant flex justify-between items-center flex-wrap gap-sm">
+            <div><h3 class="text-[20px] font-semibold flex items-center gap-sm"><span class="material-symbols-outlined text-primary">visibility_lock</span>Directory — ฟิลด์ที่ซ่อนจาก non-admin</h3>
+            <p class="text-[12px] text-on-surface-variant mt-0.5">ติ๊ก = ซ่อนฟิลด์นั้นจากผู้ใช้ที่ไม่ใช่ admin (บังคับฝั่งเซิร์ฟเวอร์ กัน API leak) · ส่วน "ใครดู Directory ได้" ตั้งรายคนในฟอร์มผู้ใช้ด้านบน</p></div>
+            <button id="dir-save" class="bg-primary text-on-primary text-[14px] font-semibold rounded-lg py-2 px-md hover:bg-primary-container flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">save</span>บันทึก</button>
+          </div>
+          <div class="p-lg" id="dir-fields"><div class="text-[13px] text-on-surface-variant">กำลังโหลด…</div></div>
+        </div>`);
+      view.appendChild(dirCard);
+      const dirFields = dirCard.querySelector("#dir-fields");
+      const DIR_GROUP_LABEL = { money: "💰 การเงิน (ค่าตัว/ค่าธรรมเนียม)", metrics: "📊 เมตริก", other: "อื่นๆ" };
+      const loadDirSettings = async () => {
+        try {
+          const s = await api("/settings/directory");
+          const byGroup = {};
+          s.catalog.forEach((f) => { (byGroup[f.group] = byGroup[f.group] || []).push(f); });
+          const hidden = new Set(s.hidden_fields);
+          dirFields.innerHTML = Object.entries(byGroup).map(([g, fs]) => `
+            <div class="mb-md"><div class="text-[12px] font-semibold text-on-surface-variant mb-sm">${DIR_GROUP_LABEL[g] || g}</div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">${fs.map((f) => `<label class="flex items-center gap-sm px-sm py-1.5 rounded hover:bg-surface-container-low cursor-pointer text-[14px]"><input type="checkbox" class="dir-f rounded text-primary focus:ring-primary" value="${esc(f.key)}" ${hidden.has(f.key) ? "checked" : ""}/><span>${esc(f.label)}</span></label>`).join("")}</div></div>`).join("");
+        } catch (e) { dirFields.innerHTML = `<div class="text-error text-[13px]">โหลดไม่สำเร็จ: ${esc(e.message)}</div>`; }
+      };
+      dirCard.querySelector("#dir-save").addEventListener("click", async () => {
+        const hidden_fields = [...dirCard.querySelectorAll(".dir-f:checked")].map((c) => c.value);
+        try { await api("/settings/directory", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden_fields }) }); toast("บันทึกการตั้งค่า Directory แล้ว ✓"); }
+        catch (e) { toast(e.message, "err"); }
+      });
+      await loadDirSettings();
 
       // --- Local Backup (safety net) ---
       const bk = el(`
@@ -951,10 +1103,16 @@
           <div class="p-lg flex flex-col gap-sm">
             <label class="flex flex-col gap-1">${lbl("ชื่อ-สกุล")}<input id="u-name" value="${esc(u.full_name || "")}" placeholder="ชื่อ-สกุล" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("Username")}<input id="u-user" value="${esc(u.username || "")}" placeholder="Username (อย่างน้อย 3 ตัว)" class="${inpCls} ${existing ? "opacity-60" : ""}" ${existing ? "disabled" : ""}/></label>
+            <label class="flex flex-col gap-1">${lbl("Email (ลิงก์เข้ากับ Members — ใส่แล้วจะสร้าง/ผูก Member ให้อัตโนมัติ)")}<input id="u-email" value="${esc(u.email || "")}" placeholder="name@company.com" class="${inpCls}"/></label>
             <label class="flex flex-col gap-1">${lbl("สิทธิ์การใช้งาน")}<select id="u-role" class="${inpCls}">
-              <option value="viewer" ${u.role === "viewer" ? "selected" : ""}>Viewer (ลูกค้า — ดูอย่างเดียว)</option>
+              <option value="viewer" ${u.role === "viewer" ? "selected" : ""}>Viewer (ดูเฉพาะแคมเปญที่ได้รับสิทธิ์)</option>
+              <option value="manager" ${u.role === "manager" ? "selected" : ""}>Manager (จัดการเฉพาะแคมเปญที่ถูก assign)</option>
               <option value="admin" ${u.role === "admin" ? "selected" : ""}>Admin (ผู้ดูแล — จัดการได้เต็ม)</option></select></label>
-            <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 4 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
+            <label class="flex flex-col gap-1">${lbl("องค์กร / บริษัท (Organization)")}<input id="u-org" value="${esc(u.organization || "")}" placeholder="เช่น Wakuwaku, MOLLE" class="${inpCls}"/></label>
+            <label class="flex flex-col gap-1">${lbl("ตำแหน่งงาน (Position)")}<input id="u-position" value="${esc(u.position || "")}" placeholder="เช่น Account Manager, Creative Lead" class="${inpCls}"/></label>
+            <label class="flex flex-col gap-1">${lbl("โน้ต (Note)")}<input id="u-note" value="${esc(u.note || "")}" placeholder="บันทึกย่อ (ไม่บังคับ)" class="${inpCls}"/></label>
+            <label class="flex items-start gap-sm mt-1 p-sm rounded-lg bg-surface-container-low cursor-pointer"><input type="checkbox" id="u-diraccess" ${u.directory_access ? "checked" : ""} class="mt-1 rounded text-primary focus:ring-primary"/><span class="text-[13px]"><b>เปิดให้ดู Directory อินฟลูเอนเซอร์</b><br><span class="text-on-surface-variant text-[12px]">สำหรับ Manager/Viewer (Admin เห็นเสมอ) · ฟิลด์เงิน/sensitive ถูกซ่อนตามที่ตั้งค่าไว้ในหน้านี้</span></span></label>
+            <label class="flex flex-col gap-1">${lbl(existing ? "รหัสผ่านใหม่ (เว้นว่างไว้ถ้าไม่เปลี่ยน)" : "Password (อย่างน้อย 8 ตัว)")}${pwInput("u-pass", existing ? "รหัสผ่านใหม่" : "Password")}</label>
             <label class="flex flex-col gap-1">${lbl("ยืนยันรหัสผ่าน")}${pwInput("u-pass2", "พิมพ์รหัสผ่านอีกครั้ง")}</label>
           </div>
           <div class="px-lg py-md border-t border-outline-variant flex justify-end gap-md">
@@ -967,22 +1125,27 @@
     modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
     modal.querySelector("[data-save]").addEventListener("click", async () => {
       const full_name = modal.querySelector("#u-name").value.trim();
+      const email = modal.querySelector("#u-email").value.trim();
       const role = modal.querySelector("#u-role").value;
+      const organization = modal.querySelector("#u-org").value.trim();
+      const position = modal.querySelector("#u-position").value.trim();
+      const note = modal.querySelector("#u-note").value.trim();
+      const directory_access = modal.querySelector("#u-diraccess").checked;
       const pass = modal.querySelector("#u-pass").value;
       const pass2 = modal.querySelector("#u-pass2").value;
       if (pass || pass2) {
-        if (pass.length < 4) return toast("รหัสผ่านสั้นเกินไป (อย่างน้อย 4 ตัว)", "err");
+        if (pass.length < 8) return toast("รหัสผ่านสั้นเกินไป (อย่างน้อย 8 ตัว)", "err");
         if (pass !== pass2) return toast("ยืนยันรหัสผ่านไม่ตรงกัน", "err");
       }
       try {
         if (existing) {
-          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, role }) });
+          await api("/auth/users/" + existing.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, email, role, organization, position, note, directory_access }) });
           if (pass) await api("/auth/users/" + existing.id + "/password", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ new_password: pass }) });
           toast("อัปเดตผู้ใช้แล้ว");
         } else {
           const username = modal.querySelector("#u-user").value.trim();
           if (!pass) return toast("กรุณาตั้งรหัสผ่าน", "err");
-          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, password: pass, role }) });
+          await api("/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ full_name, username, email, password: pass, role, organization, position, note, directory_access }) });
           toast("เพิ่มผู้ใช้แล้ว");
         }
         close(); onDone && onDone();
@@ -1004,8 +1167,7 @@
         <div>1. <b>Directory</b> — ดู/ค้นหา/กรองอินฟลูเอนเซอร์ (ตาม Tier, แพลตฟอร์ม, หมวด, ราคา)</div>
         <div>2. <b>Add / Import</b> — เพิ่มทีละคน หรืออัปโหลด Excel/CSV (เฉพาะ Admin)</div>
         <div>3. <b>Campaigns</b> — สร้างแคมเปญ มอบหมายอินฟลู และตั้งงบ</div>
-        <div>4. <b>Financials</b> — ดูมูลค่ารวม โครงสร้างค่าใช้จ่าย และ Top earners</div>
-        <div>5. <b>Analytics</b> — เปรียบเทียบ performance ระหว่างหมวด</div>`)}
+        <div>4. <b>Analytics</b> — เปรียบเทียบ performance ระหว่างหมวด</div>`)}
       ${cardBox("help", "คำถามที่พบบ่อย", `
         <div><b>Tier คำนวณยังไง?</b> อัตโนมัติจากจำนวนผู้ติดตาม (แก้เองได้ในฟอร์ม)</div>
         <div><b>viewer ทำอะไรได้?</b> ดูข้อมูลทุกหน้า แต่แก้ไข/เพิ่ม/ลบไม่ได้</div>
@@ -1043,6 +1205,21 @@
             <button data-browse class="bg-surface border border-outline-variant text-primary font-semibold rounded-lg py-2 px-md hover:bg-surface-container-lowest transition-colors shadow-sm">Browse Files</button>
             <input type="file" accept=".csv,.xlsx,.xls" class="hidden" data-fileinput />
           </div>
+          <div class="flex flex-wrap items-center justify-between gap-sm bg-surface-container-low/60 border border-outline-variant rounded-lg px-md py-sm">
+            <div class="text-[13px] text-on-surface-variant">📋 ไม่รู้จะกรอกคอลัมน์ไหน? โหลดเทมเพลตที่หัวตารางแมชไว้แล้ว แล้วกรอกตามได้เลย</div>
+            <button data-template class="bg-surface border border-primary text-primary text-[13px] font-semibold rounded-lg py-2 px-md hover:bg-surface-container-lowest transition-colors flex items-center gap-1 shrink-0"><span class="material-symbols-outlined text-[18px]">download</span>ดาวน์โหลดเทมเพลต Excel</button>
+          </div>
+          <details class="text-[12px] text-on-surface-variant border border-outline-variant rounded-lg px-md py-sm">
+            <summary class="cursor-pointer font-semibold text-on-surface">ดูคอลัมน์ที่รองรับ + รูปแบบค่า</summary>
+            <div class="mt-sm leading-relaxed">
+              <b>จำเป็น:</b> ชื่อ (Name)<br/>
+              <b>ตัวเลข</b> (ใส่ <code>1.2M</code> / <code>฿95,000</code> / <code>4.8%</code> ได้): Followers, Engagement Rate, ค่าตัว, ค่าเจนโค้ด, ค่าเมเนจฟี, ค่าเอเจนฟี %, Age<br/>
+              <b>ข้อความ:</b> Handle, Niche, Platform, Location, Bio, Notes, Currency<br/>
+              <b>ลิงก์ (URL เต็ม):</b> Instagram / TikTok / YouTube / Facebook / X / Website Link<br/>
+              <b>อื่นๆ:</b> Tier = Nano/Micro/Mega (เว้นว่าง = คิดจาก followers อัตโนมัติ) · Verified = yes/no<br/>
+              <span class="text-[11px]">หัวตารางสะกดใกล้เคียงก็พอ — ระบบแมชไทย/อังกฤษให้อัตโนมัติ · ชื่อ/handle ซ้ำของเดิม = อัปเดต</span>
+            </div>
+          </details>
           <div id="mapping-zone"></div>
         </div>
         <div class="px-lg py-md border-t border-outline-variant flex justify-between items-center bg-surface-container-lowest">
@@ -1070,6 +1247,7 @@
     dz.addEventListener("drop", (e) => e.dataTransfer.files[0] && handleFile(e.dataTransfer.files[0], modal));
 
     modal.querySelector("[data-process]").addEventListener("click", () => processImport(modal, close));
+    modal.querySelector("[data-template]").addEventListener("click", () => window.open(API + "/imports/template", "_blank"));
   }
 
   async function handleFile(file, modal) {
@@ -1179,13 +1357,6 @@
         </div>
         <form id="inf-form" class="p-lg overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-md">
           ${sectionHead("badge", "ข้อมูลส่วนตัว · Personal details")}
-          ${field("name", "Name *", d.name)}
-          ${field("handle", "Handle", d.handle)}
-          ${field("niche", "Niche (comma sep)", d.niche)}
-          ${field("platform", "Platform", d.platform)}
-          ${field("age", "Age", d.age ?? "", "number")}
-          ${field("location", "Location", d.location)}
-          ${field("active_since", "Active Since", d.active_since)}
           <div class="sm:col-span-2 flex items-center gap-md">
             <div id="avatar-preview" class="w-16 h-16 rounded-full overflow-hidden bg-surface-container-high border border-outline-variant flex items-center justify-center shrink-0">
               ${d.avatar_url ? `<img src="${esc(mediaSrc(d.avatar_url))}" class="w-full h-full object-cover"/>` : `<span class="material-symbols-outlined text-on-surface-variant">person</span>`}
@@ -1200,15 +1371,21 @@
               <span data-avatar-status class="text-[11px] text-on-surface-variant"></span>
             </div>
           </div>
+          ${field("name", "Name *", d.name)}
+          ${field("handle", "Handle", d.handle)}
+          ${field("niche", "KOL Type (comma sep)", d.niche)}
+          ${field("platform", "Platform", d.platform)}
+          ${field("age", "Age", d.age ?? "", "number")}
+          ${field("location", "Location", d.location)}
+          ${field("active_since", "Active Since", d.active_since)}
           ${sectionHead("groups", "ตัวชี้วัด · Audience metrics")}
           ${field("followers", "Followers", d.followers ?? 0, "number")}
           ${field("engagement_rate", "Engagement %", d.engagement_rate ?? 0, "number")}
           ${field("growth_30d", "Growth 30d %", d.growth_30d ?? 0, "number")}
           <label class="flex flex-col gap-1"><span class="text-[12px] tracking-wide font-semibold text-on-surface-variant">Tier (ระดับอินฟลู)</span>
-            <select name="tier" data-tier class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[15px] focus:border-primary focus:ring-1 focus:ring-primary">
-              <option value="">Auto — จาก Followers</option>
-              ${TIERS.map((t) => `<option value="${t}" ${d.tier === t ? "selected" : ""}>${t}</option>`).join("")}
-            </select>
+            <input name="tier" data-tier list="tier-options" autocomplete="off" value="${esc(d.tier || "")}" placeholder="เว้นว่าง = Auto จาก Followers · หรือกรอกเอง"
+              class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 text-[15px] focus:border-primary focus:ring-1 focus:ring-primary"/>
+            <datalist id="tier-options">${TIERS.map((t) => `<option value="${t}"></option>`).join("")}</datalist>
             <span data-tier-hint class="text-[11px] text-on-surface-variant"></span></label>
           ${sectionHead("payments", "ค่าใช้จ่าย · Pricing")}
           ${field("base_rate", "Base Rate ค่าตัว (฿)", d.base_rate ?? 0, "number")}
@@ -1380,16 +1557,21 @@
     avatarUrl.addEventListener("input", () => setAvatarPreview(avatarUrl.value.trim()));
 
     // --- Tier auto-hint (mirrors backend auto-derivation) ---
-    const tierSelect = modal.querySelector("[data-tier]");
+    const tierInput = modal.querySelector("[data-tier]");
     const tierHint = modal.querySelector("[data-tier-hint]");
     const followersInput = modal.querySelector('input[name="followers"]');
     const updateTierHint = () => {
       const auto = tierForFollowers(followersInput.value);
-      tierHint.textContent = tierSelect.value
-        ? `กำหนดเอง · auto = ${auto}`
-        : `จะเป็น ${auto} อัตโนมัติจาก ${fmtNum(followersInput.value)} followers`;
+      const v = tierInput.value.trim();
+      if (!v) {
+        tierHint.textContent = `จะเป็น ${auto} อัตโนมัติจาก ${fmtNum(followersInput.value)} followers`;
+      } else if (TIERS.some((t) => t.toLowerCase() === v.toLowerCase())) {
+        tierHint.textContent = `กำหนดเอง · auto = ${auto}`;
+      } else {
+        tierHint.textContent = `Tier กำหนดเอง: “${v}” · auto = ${auto}`;
+      }
     };
-    tierSelect.addEventListener("change", updateTierHint);
+    tierInput.addEventListener("input", updateTierHint);
     followersInput.addEventListener("input", updateTierHint);
     updateTierHint();
 
@@ -1440,7 +1622,7 @@
   }
 
   // ---------- global wiring ----------
-  document.addEventListener("click", (e) => {
+  document.addEventListener("click", async (e) => {
     // password show/hide toggle
     const eye = e.target.closest("[data-eye]");
     if (eye) {
@@ -1456,28 +1638,96 @@
 
     // sidebar SPA navigation (links use data-route, not href)
     const navLink = e.target.closest("[data-route]");
-    if (navLink) { e.preventDefault(); location.hash = navLink.dataset.route; return; }
+    if (navLink) { e.preventDefault(); location.hash = navLink.dataset.route; document.body.classList.remove("nav-open"); return; }
 
     const a = e.target.closest("[data-action]");
     if (!a) return;
     if (a.dataset.action === "import") openImportModal();
     if (a.dataset.action === "add-influencer") openInfluencerForm();
     if (a.dataset.action === "export") {
+      if (a.dataset.exportContext === "campaign") {
+        const [routeName, routeParam] = parseHash(location.hash || "#/assets");
+        const assetId = routeName === "asset" ? Number(routeParam) : null;
+        if (!window.CA?.openExportModal) return toast("Campaign export is not ready. Please reload.", "err");
+        window.CA.openExportModal(assetId || null);
+        return;
+      }
       const tokenQ = auth?.token ? "&token=" + encodeURIComponent(auth.token) : "";
       window.open(API + "/influencers/export?format=xlsx" + tokenQ, "_blank");
       toast("Exporting roster to Excel…");
     }
+    if (a.dataset.action === "backup-json") {
+      try {
+        const r = await api("/backup", { method: "POST" });
+        const tokenQ = auth?.token ? "?token=" + encodeURIComponent(auth.token) : "";
+        window.open(API + "/backup/" + encodeURIComponent(r.filename) + "/download" + tokenQ, "_blank");
+        toast(`Backup .json created (${r.counts.influencers} influencers)`);
+      } catch (e) { toast(e.message, "err"); }
+    }
+    if (a.dataset.action === "restore-json") {
+      if (!confirm("Restore from the latest .json backup?\\nCurrent data will be replaced after the system snapshots it first.")) return;
+      try {
+        const r = await api("/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+        toast(`Restored latest .json: influencers ${r.counts.influencers}, campaigns ${r.counts.campaigns}`);
+      } catch (e) { toast(e.message, "err"); }
+    }
   });
 
+  // Mobile nav: hamburger toggles the off-canvas sidebar; overlay closes it.
+  $("#nav-toggle")?.addEventListener("click", () => document.body.classList.toggle("nav-open"));
+  $("#nav-overlay")?.addEventListener("click", () => document.body.classList.remove("nav-open"));
+
+  // Global search — quick results across BOTH campaigns and influencers (dropdown),
+  // with Enter / "view all" falling back to the full Directory filter.
   let searchTimer;
-  $("#global-search").addEventListener("input", (e) => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      filterState.search = e.target.value.trim();
-      if (!location.hash.startsWith("#/directory")) location.hash = "#/directory";
-      else render();
-    }, 300);
-  });
+  (function wireGlobalSearch() {
+    const input = $("#global-search");
+    if (!input) return;
+    let dd = null, searchRequestGen = 0;
+    const closeDD = () => { if (dd) { dd.remove(); dd = null; } };
+    const goDirectory = () => {
+      filterState.search = input.value.trim();
+      if (location.hash.startsWith("#/directory")) render(); else location.hash = "#/directory";
+      closeDD();
+    };
+    const openDD = (html) => {
+      closeDD();
+      const r = input.getBoundingClientRect();
+      dd = el(`<div style="position:fixed;top:${r.bottom + 6}px;left:${r.left}px;width:${Math.max(r.width, 320)}px;z-index:60;background:#fff;border:1px solid #e5e5e8;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.15);max-height:60vh;overflow:auto"></div>`);
+      dd.innerHTML = html;
+      document.body.appendChild(dd);
+      dd.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
+        const go = b.dataset.go;
+        if (go === "#/directory") goDirectory();
+        else { location.hash = go; closeDD(); }
+        input.blur();
+      }));
+    };
+    document.addEventListener("click", (e) => { if (dd && !dd.contains(e.target) && e.target !== input) closeDD(); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") goDirectory(); });
+    input.addEventListener("input", (e) => {
+      clearTimeout(searchTimer);
+      const requestGen = ++searchRequestGen;
+      const q = e.target.value.trim();
+      searchTimer = setTimeout(async () => {
+        if (q.length < 2) { closeDD(); return; }
+        const eq = encodeURIComponent(q);
+        const [camps, infs] = await Promise.all([
+          api("/assets/summaries?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
+          api("/influencers?search=" + eq + "&limit=5").catch(() => ({ items: [] })),
+        ]);
+        if (requestGen !== searchRequestGen) return;
+        const row = (icon, title, sub, go) => `<button data-go="${go}" class="w-full text-left px-md py-2 hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px] text-on-surface-variant">${icon}</span><span class="min-w-0"><span class="block font-semibold truncate">${esc(title)}</span><span class="block text-[12px] text-on-surface-variant truncate">${esc(sub)}</span></span></button>`;
+        const head = (t) => `<div class="px-md pt-2 pb-1 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wide">${t}</div>`;
+        let html = "";
+        if ((camps.items || []).length) html += head("Campaigns") + camps.items.map((c) => row("grid_view", c.campaign_name, c.client_name || "", "#/asset/" + c.id)).join("");
+        if ((infs.items || []).length) html += head("Influencers") + infs.items.map((i) => row("person", i.name, (i.handle || "") + " · " + fmtNum(i.followers || 0), "#/influencer/" + i.id)).join("");
+        if (!html) html = `<div class="px-md py-3 text-[13px] text-on-surface-variant">ไม่พบผลลัพธ์สำหรับ "${esc(q)}"</div>`;
+        html += `<button data-go="#/directory" class="w-full text-left px-md py-2 border-t border-outline-variant text-[13px] text-primary font-semibold hover:bg-surface-container-low">ดูทั้งหมดใน Directory →</button>`;
+        openDD(html);
+      }, 250);
+    });
+  })();
 
   // ---------- login + session boot ----------
   function showLogin(message = "") {
@@ -1485,49 +1735,96 @@
     const overlay = el(`
       <div id="login-overlay" class="fixed inset-0 z-[100] bg-surface flex items-center justify-center p-md">
         <div class="w-full max-w-sm bg-surface-container-lowest rounded-2xl border border-outline-variant elevation-2 p-xl flex flex-col gap-md">
-          <div class="flex items-center gap-sm">
-            <div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center"><span class="material-symbols-outlined text-on-primary">hub</span></div>
-            <div><div class="text-[22px] font-black text-primary font-poppins leading-none">Creator Hub</div>
-            <div class="text-[12px] text-on-surface-variant font-semibold tracking-wide">Enterprise Management</div></div>
+          <div class="login-brand-mark">
+            <img src="./assets/influ-logo.png?v=1" alt="Influencer" />
           </div>
           <h1 class="text-[20px] font-semibold mt-sm">เข้าสู่ระบบ</h1>
           ${message ? `<div class="text-[13px] text-error bg-error-container/40 rounded-lg px-sm py-2">${esc(message)}</div>` : ""}
+          <div id="google-signin" class="flex justify-center min-h-[42px]">
+            <button id="google-btn" type="button" class="w-full flex items-center justify-center gap-2 bg-white border border-outline-variant rounded-full py-2.5 font-semibold text-[14px] text-on-surface hover:bg-surface-container-low transition-colors">
+              <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              Sign in with Google
+            </button>
+          </div>
+          <div id="google-divider" class="flex items-center gap-2 text-[11px] text-on-surface-variant"><span class="flex-1 border-t border-outline-variant"></span>หรือเข้าด้วยบัญชีภายใน<span class="flex-1 border-t border-outline-variant"></span></div>
           <label class="flex flex-col gap-1"><span class="text-[12px] font-semibold text-on-surface-variant">Username</span>
             <input id="lg-user" class="bg-surface-container-lowest border border-outline-variant rounded-lg px-sm py-2 focus:border-primary focus:ring-1 focus:ring-primary" autocomplete="username"/></label>
           <label class="flex flex-col gap-1"><span class="text-[12px] font-semibold text-on-surface-variant">Password</span>
             ${pwInput("lg-pass", "")}</label>
+          <label class="flex items-center gap-2 text-[13px] text-on-surface-variant select-none cursor-pointer"><input type="checkbox" id="lg-remember" class="rounded accent-primary"/> จดจำ ID</label>
           <div id="lg-err" class="text-[13px] text-error min-h-[18px]"></div>
           <button id="lg-btn" class="bg-primary text-on-primary font-semibold rounded-lg py-2 hover:bg-primary-container shadow-sm flex items-center justify-center gap-1"><span class="material-symbols-outlined text-[20px]">login</span>เข้าสู่ระบบ</button>
-          <div class="text-[12px] text-on-surface-variant bg-surface-container-low rounded-lg px-sm py-2 leading-relaxed">
-            <b>ทดลองใช้:</b><br/>admin / admin123 (ผู้ดูแล)<br/>viewer / viewer123 (ลูกค้า — ดูอย่างเดียว)
-          </div>
         </div>
       </div>`);
     document.body.appendChild(overlay);
     const userI = overlay.querySelector("#lg-user");
     const passI = overlay.querySelector("#lg-pass");
+    const rememberC = overlay.querySelector("#lg-remember");
     const err = overlay.querySelector("#lg-err");
     const btn = overlay.querySelector("#lg-btn");
-    userI.focus();
+    // Remember ID: prefill the saved username (default on) so returning users only type the password.
+    const savedId = localStorage.getItem("ch_remember_id") || "";
+    rememberC.checked = true;
+    if (savedId) { userI.value = savedId; passI.focus(); } else { userI.focus(); }
     const submit = async () => {
       err.textContent = "";
       btn.disabled = true;
       try {
+        const username = userI.value.trim();
         const res = await fetch(API + "/auth/login", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: userI.value.trim(), password: passI.value }),
+          body: JSON.stringify({ username, password: passI.value }),
         });
         if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || "เข้าสู่ระบบไม่สำเร็จ"); }
+        if (rememberC.checked) localStorage.setItem("ch_remember_id", username);
+        else localStorage.removeItem("ch_remember_id");
         setAuth(await res.json());
         overlay.remove();
-        startApp();
+        startApp("#/home");   // always land on the Dashboard right after logging in
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     };
     btn.addEventListener("click", submit);
     [userI, passI].forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); }));
+
+    // Google Sign-In. The custom button is always visible; if the backend has a
+    // client id configured we swap in the official Google button (real OAuth),
+    // otherwise clicking explains how an admin turns it on.
+    (async () => {
+      const mount = overlay.querySelector("#google-signin");
+      const customBtn = overlay.querySelector("#google-btn");
+      let cfg = {};
+      try { cfg = await (await fetch(API + "/auth/config")).json(); } catch (_) {}
+      const onCredential = async (resp) => {
+        err.textContent = "";
+        try {
+          const r = await fetch(API + "/auth/google", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential: resp.credential }),
+          });
+          if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "เข้าสู่ระบบด้วย Google ไม่สำเร็จ"); }
+          setAuth(await r.json()); overlay.remove(); startApp("#/home");
+        } catch (e) { err.textContent = e.message; }
+      };
+      if (cfg.google_client_id) {
+        const tryInit = (n = 0) => {
+          if (window.google?.accounts?.id) {
+            google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: onCredential });
+            mount.innerHTML = "";   // replace the placeholder with the official Google button
+            google.accounts.id.renderButton(mount, { theme: "outline", size: "large", width: 300, text: "signin_with", shape: "pill" });
+          } else if (n < 40) { setTimeout(() => tryInit(n + 1), 100); }
+        };
+        tryInit();
+      } else {
+        customBtn.addEventListener("click", () => {
+          err.textContent = "ยังไม่ได้เปิดใช้ Google Login — แอดมินต้องตั้งค่า GOOGLE_CLIENT_ID ในเซิร์ฟเวอร์ก่อน";
+        });
+      }
+    })();
   }
 
   function logout() {
+    // Revoke the token server-side (kills all sessions), then clear locally.
+    try { api("/auth/logout", { method: "POST" }).catch(() => {}); } catch (_) {}
     setAuth(null);
     document.querySelector("#profile-menu")?.remove();
     showLogin();
@@ -1542,7 +1839,7 @@
         <span class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold text-[14px] font-poppins">${esc((u.full_name||u.username||"?")[0].toUpperCase())}</span>
         <span class="hidden sm:flex flex-col items-start leading-tight">
           <span class="text-[13px] font-semibold">${esc(u.full_name || u.username)}</span>
-          <span class="text-[11px] text-on-surface-variant">${u.role === "admin" ? "ผู้ดูแล · Admin" : "ผู้ชม · Viewer"}</span>
+          <span class="text-[11px] text-on-surface-variant">${u.role === "admin" ? "ผู้ดูแล · Admin" : u.role === "manager" ? "ผู้จัดการ · Manager" : "ผู้ชม · Viewer"}</span>
         </span>
         <span class="material-symbols-outlined text-on-surface-variant text-[20px]">expand_more</span>
       </button>`;
@@ -1553,7 +1850,7 @@
         <div id="profile-menu" class="absolute right-0 top-12 w-56 bg-surface-container-lowest border border-outline-variant rounded-xl elevation-2 py-1 z-50">
           <div class="px-md py-2 border-b border-outline-variant">
             <div class="font-semibold text-[14px]">${esc(u.full_name || u.username)}</div>
-            <div class="text-[12px] text-on-surface-variant">@${esc(u.username)} · ${u.role === "admin" ? "Admin" : "Viewer"}</div>
+            <div class="text-[12px] text-on-surface-variant">@${esc(u.username)} · ${u.role === "admin" ? "Admin" : u.role === "manager" ? "Manager" : "Viewer"}</div>
           </div>
           <button data-route="#/settings" class="w-full text-left px-md py-2 text-[14px] hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px]">settings</span>Settings</button>
           <button data-route="#/support" class="w-full text-left px-md py-2 text-[14px] hover:bg-surface-container-low flex items-center gap-sm"><span class="material-symbols-outlined text-[18px]">help</span>Support</button>
@@ -1567,11 +1864,15 @@
     });
   }
 
-  async function startApp() {
+  async function startApp(forceHash) {
     setAuth(auth);                          // refresh body.is-viewer class
     renderProfileChip();
-    if (!location.hash) location.hash = "#/directory";
-    render();
+    // Render exactly once. Either we're already on the target hash (render now),
+    // or we navigate to it and let the single hashchange handler render — never
+    // both (that double-rendered the page, stacking two copies).
+    const target = forceHash || location.hash || "#/home";
+    if (location.hash === target) render();
+    else location.hash = target;
   }
 
   async function boot() {
@@ -1588,7 +1889,7 @@
   // Bridge for separate feature modules (e.g. content.js) — lets them register
   // routes and reuse helpers without modifying this file's logic.
   window.CH = {
-    route, render, api, uploadFile, el, esc, toast,
+    route, render, goBack, api, uploadFile, el, esc, toast,
     fmtNum, fmtMoney, mediaSrc, isAdmin,
     qs: (sel, root) => (root || document).querySelector(sel),
     get token() { return auth?.token || null; },

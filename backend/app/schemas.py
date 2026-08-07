@@ -75,14 +75,13 @@ def sanitize_past_campaigns(campaigns: list[dict[str, Any]] | None) -> list[dict
 
 
 def normalize_tier_value(value: str | None) -> str:
-    """Empty string passes through (auto-derive later); else must be a known tier."""
+    """Empty string passes through (auto-derive later). A known tier is
+    canonicalised (Nano / Micro / Mega); any other non-empty text is kept as a
+    custom, hand-entered tier label (trimmed to the column width)."""
     raw = str(value or "").strip()
     if not raw:
         return ""
-    tier = normalize_tier(raw)
-    if not tier:
-        raise ValueError("Tier must be one of Nano, Micro, Mega")
-    return tier
+    return normalize_tier(raw) or raw[:20]
 
 
 class InfluencerBase(BaseModel):
@@ -255,7 +254,9 @@ class ImportResult(BaseModel):
 
 # ---------- Auth / users ----------
 
-ROLES = {"admin", "viewer"}
+# admin = full control; manager = edit only campaigns assigned to them;
+# viewer = read-only, and only campaigns assigned to them.
+ROLES = {"admin", "manager", "viewer"}
 
 
 class LoginRequest(BaseModel):
@@ -263,12 +264,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str   # Google ID token (JWT) from Google Identity Services
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
+    email: str = ""
     full_name: str = ""
     role: str
+    organization: str = ""
+    position: str = ""
+    note: str = ""
+    directory_access: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -276,34 +286,73 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+# Reject obviously-weak / default passwords (length is enforced separately).
+_COMMON_PASSWORDS = {
+    "password", "password1", "passw0rd", "12345678", "123456789", "1234567890",
+    "qwerty123", "admin123", "administrator", "letmein1", "welcome1", "iloveyou",
+    "viewer123", "changeme", "secret12", "abc12345", "00000000", "11111111",
+    "creatorhub", "wakuwaku", "qwertyui",
+}
+
+
+def validate_password_strength(pw: str) -> str:
+    if len(pw) < 8:
+        raise ValueError("รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร")
+    if pw.lower() in _COMMON_PASSWORDS:
+        raise ValueError("รหัสผ่านนี้ง่ายเกินไป (อยู่ในรายการที่พบบ่อย) — กรุณาตั้งใหม่")
+    if len(set(pw)) == 1:
+        raise ValueError("รหัสผ่านต้องไม่ใช่ตัวอักษรเดียวซ้ำกัน")
+    return pw
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=80)
-    password: str = Field(..., min_length=4, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
+    email: str = ""
     full_name: str = ""
     role: str = "viewer"
+    organization: str = ""
+    position: str = ""
+    note: str = ""
+    directory_access: bool = False
 
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str) -> str:
         if value not in ROLES:
-            raise ValueError("Role must be 'admin' or 'viewer'")
+            raise ValueError("Role must be 'admin', 'manager' or 'viewer'")
         return value
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 
 class PasswordChange(BaseModel):
     current_password: str | None = None     # required when changing your own
-    new_password: str = Field(..., min_length=4, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 
 class UserUpdate(BaseModel):
     full_name: str | None = None
+    email: str | None = None
     role: str | None = None
+    organization: str | None = None
+    position: str | None = None
+    note: str | None = None
+    directory_access: bool | None = None
 
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str | None) -> str | None:
         if value is not None and value not in ROLES:
-            raise ValueError("Role must be 'admin' or 'viewer'")
+            raise ValueError("Role must be 'admin', 'manager' or 'viewer'")
         return value
 
 

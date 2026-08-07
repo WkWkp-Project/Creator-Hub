@@ -53,10 +53,11 @@ def _sign(body: str) -> str:
     return _b64e(sig)
 
 
-def create_token(*, username: str, role: str) -> str:
+def create_token(*, username: str, role: str, token_version: int = 0) -> str:
     payload = {
         "sub": username,
         "role": role,
+        "tv": token_version,   # bumped on logout / password change → revokes old tokens
         "exp": int(time.time()) + settings.token_ttl_hours * 3600,
     }
     body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
